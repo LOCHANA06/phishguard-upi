@@ -1,0 +1,54 @@
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',system-ui,sans-serif}
+:root{--blue:#0b5fff;--blue-dark:#0846c0;--bg:#f4f7ff;--ink:#0f1c3f;--muted:#6b7aa8;
+--danger:#e02b4b;--ok:#12b76a;--warn:#f59e0b}
+body{background:var(--bg);color:var(--ink)}
+.shell{display:flex;min-height:100vh}
+.sidebar{width:250px;background:#fff;border-right:1px solid #e3eaf9;padding:24px 16px;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.logo{display:flex;gap:10px;align-items:center;margin-bottom:28px}
+.logo .shield{font-size:30px}
+.logo small{color:var(--muted)}
+nav{display:flex;flex-direction:column;gap:6px;flex:1}
+.nav-btn{border:0;background:transparent;text-align:left;padding:12px 14px;border-radius:10px;font-size:15px;cursor:pointer;color:var(--ink);transition:.15s}
+.nav-btn:hover{background:#eef3ff;color:var(--blue)}
+.nav-btn.active{background:var(--blue);color:#fff;font-weight:600}
+.sidebar-footer{font-size:12px;color:var(--muted);border-top:1px solid #eef2fb;padding-top:14px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok)}
+.content{flex:1;padding:32px 40px;max-width:1100px}
+h1{font-size:26px;margin-bottom:22px}
+.page{display:none}.page.active{display:block;animation:fade .25s}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
+.card{background:#fff;border:1px solid #e3eaf9;border-radius:14px;padding:20px;box-shadow:0 1px 4px rgba(15,28,63,.05)}
+.stat h3{font-size:30px;color:var(--blue)}.stat.danger h3{color:var(--danger)}
+.stat.warn h3{color:var(--warn)}.stat.ok h3{color:var(--ok)}
+.stat p{color:var(--muted);font-size:13px;margin-top:4px}
+.table-card h2{font-size:16px;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{color:var(--muted);text-align:left;font-weight:600;padding:8px;border-bottom:2px solid #eef2fb}
+td{padding:10px 8px;border-bottom:1px solid #f2f5fc}
+.badge{padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.b-low{background:#e6f9f0;color:var(--ok)}.b-medium{background:#fef3e0;color:#c47d00}.b-high{background:#fde8ec;color:var(--danger)}
+.center{text-align:center}
+.muted{color:var(--muted);font-size:14px}
+.btn{border:0;border-radius:10px;padding:12px 22px;font-size:15px;cursor:pointer;font-weight:600;transition:.15s}
+.btn.primary{background:var(--blue);color:#fff}.btn.primary:hover{background:var(--blue-dark)}
+.btn.ghost{background:#eef3ff;color:var(--blue)}.btn.danger{background:var(--danger);color:#fff}
+.btn.confirm{background:var(--ok);color:#fff}
+.back{margin-bottom:18px}
+.row{display:flex;gap:12px;margin-top:14px}
+label{display:block;font-size:13px;font-weight:600;margin:12px 0 6px;color:var(--muted)}
+input,select,textarea{width:100%;padding:12px;border:1px solid #d8e2f7;border-radius:10px;font-size:14px;outline:none}
+input:focus,textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(11,95,255,.12)}
+#qr-viewfinder{display:flex;justify-content:center;margin:26px 0}
+.qr-frame{width:220px;height:220px;border:3px solid var(--blue);border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:64px;position:relative;overflow:hidden;background:#f8faff}
+.scanline{position:absolute;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--blue),transparent);animation:scan 1.8s linear infinite;display:none}
+.qr-frame.scanning .scanline{display:block}
+@keyframes scan{0%{top:0}100%{top:100%}}
+.result-card{max-width:640px}
+.risk-high{border-left:6px solid var(--danger)}.risk-medium{border-left:6px solid var(--warn)}.risk-low{border-left:6px solid var(--ok)}
+.alert-item{background:#fff;border:1px solid #e3eaf9;border-left:6px solid var(--warn);border-radius:12px;padding:16px 20px;margin-bottom:12px}
+.alert-item.high{border-left-color:var(--danger)}
+.reason-list{margin:12px 0 4px 18px;line-height:1.7}
+.action-box{background:#eef3ff;border-radius:10px;padding:12px 16px;margin-top:12px;font-weight:600;color:var(--blue-dark)}
+.gauge{width:110px;height:110px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;color:#fff;margin:0 auto 8px}
+.form-grid{max-width:560px}

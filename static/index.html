@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhishGuard UPI — Real-Time Fraud Shield</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="logo"><span class="shield">🛡️</span><div><b>PhishGuard</b><small>UPI Security Suite</small></div></div>
+    <nav>
+      <button class="nav-btn active" data-page="dashboard">📊 Dashboard</button>
+      <button class="nav-btn" data-page="qr">📱 Scan QR Code</button>
+      <button class="nav-btn" data-page="link">🔗 Analyze Payment Link</button>
+      <button class="nav-btn" data-page="txn">💳 New Transaction</button>
+      <button class="nav-btn" data-page="alerts">🔔 Alerts</button>
+      <button class="nav-btn" data-page="report">🚩 Report Fraud</button>
+    </nav>
+    <div class="sidebar-footer">Model: GBClassifier<br>Live protection: <span class="dot ok"></span> Active</div>
+  </aside>
+
+  <main class="content">
+    <!-- DASHBOARD -->
+    <section id="page-dashboard" class="page active">
+      <h1>Dashboard</h1>
+      <div class="cards">
+        <div class="card stat"><h3 id="st-total">–</h3><p>Transactions Analyzed</p></div>
+        <div class="card stat danger"><h3 id="st-high">–</h3><p>High-Risk Flagged</p></div>
+        <div class="card stat warn"><h3 id="st-blocked">–</h3><p>Blocked / Held</p></div>
+        <div class="card stat ok"><h3 id="st-avg">–</h3><p>Avg Risk Score</p></div>
+      </div>
+      <div class="card table-card">
+        <h2>Recent Transactions</h2>
+        <table id="txn-table">
+          <thead><tr><th>Ref</th><th>Payee</th><th>Amount</th><th>Source</th><th>Risk</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- QR SCAN -->
+    <section id="page-qr" class="page">
+      <h1>Scan QR Code</h1>
+      <div class="card center">
+        <p class="muted">Scan a UPI QR code to analyze it for phishing before you pay.</p>
+        <div id="qr-viewfinder"><div class="qr-frame"><div class="scanline"></div>📷</div></div>
+        <button id="btn-scan" class="btn primary">Start Scan & Detect</button>
+      </div>
+    </section>
+
+    <!-- LINK ANALYSIS -->
+    <section id="page-link" class="page">
+      <h1>Analyze Payment Link</h1>
+      <div class="card">
+        <label>Payment URL / UPI ID</label>
+        <input id="link-input" placeholder="https://pay.example.xyz/upi?pa=fraud@ybl&am=4999  or  fraud@upi">
+        <div class="row">
+          <button id="btn-link" class="btn primary">Analyze Link</button>
+          <button id="btn-link-demo" class="btn ghost">Try a phishing sample</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TRANSACTION -->
+    <section id="page-txn" class="page">
+      <h1>New Transaction</h1>
+      <div class="card form-grid">
+        <div><label>Amount (₹)</label><input id="t-amount" type="number" value="4999"></div>
+        <div><label>Recipient UPI ID</label><input id="t-upi" value="quickrewards@ybl"></div>
+        <div><label>Merchant / Payee Name</label><input id="t-name" value="Quick Rewards"></div>
+        <div><label>Location</label><input id="t-loc" value="Mumbai"></div>
+        <div class="row"><button id="btn-txn" class="btn primary">Analyze & Pay</button></div>
+      </div>
+    </section>
+
+    <!-- ALERTS -->
+    <section id="page-alerts" class="page">
+      <h1>Security Alerts</h1>
+      <div id="alert-list"></div>
+    </section>
+
+    <!-- REPORT -->
+    <section id="page-report" class="page">
+      <h1>Report Suspicious Recipient</h1>
+      <div class="card form-grid">
+        <div><label>UPI ID / Merchant</label><input id="r-upi" placeholder="fraud@upi"></div>
+        <div><label>Reason</label>
+          <select id="r-reason">
+            <option>Fake QR / payment handle</option><option>Merchant impersonation</option>
+            <option>Phishing link</option><option>Fraudulent collect request</option><option>Other</option>
+          </select></div>
+        <div><label>Details</label><textarea id="r-details" rows="3"></textarea></div>
+        <div class="row"><button id="btn-report" class="btn danger">Submit Report</button></div>
+        <p id="report-msg" class="muted"></p>
+      </div>
+    </section>
+
+    <!-- RESULT PAGE (QR / LINK / TXN flow lands here) -->
+    <section id="page-result" class="page">
+      <button class="btn ghost back" data-page="dashboard">← Back</button>
+      <div id="result-body"></div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
