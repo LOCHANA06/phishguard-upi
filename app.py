@@ -254,12 +254,4 @@ if __name__ == "__main__":
     init_db()
     app.run(debug=True, port=5000)
 
-# First, ignore files that shouldn't go up
-echo -e "phishguard.db\nphishguard_model.pkl\n__pycache__/\nvenv/" > .gitignore
 
-git init
-git add .
-git commit -m "PhishGuard UPI prototype"
-git branch -M main
-git remote add origin https://github.com/LOCHANA06/phishguard-upi.git
-git push -u origin main

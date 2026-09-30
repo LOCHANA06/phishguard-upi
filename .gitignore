@@ -1,0 +1,4 @@
+phishguard.db
+phishguard_model.pkl
+__pycache__/
+venv/
