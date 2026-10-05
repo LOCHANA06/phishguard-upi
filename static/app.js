@@ -8,7 +8,7 @@ const hide = el => el.classList.add("hidden");
 
 /* ================= API ================= */
 async function api(path, body, method = "POST") {
-  const res = await fetech(API + path, {
+  const res = await fetch(API + path, {
     method,
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
     body: body ? JSON.stringify(body) : undefined
