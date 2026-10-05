@@ -1,108 +1,281 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PhishGuard UPI — Real-Time Fraud Shield</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhishGuard UPI — Real-Time Fraud Protection</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
 </head>
 <body>
-<div class="shell">
-  <aside class="sidebar">
-    <div class="logo"><span class="shield">🛡️</span><div><b>PhishGuard</b><small>UPI Security Suite</small></div></div>
-    <nav>
-      <button class="nav-btn active" data-page="dashboard">📊 Dashboard</button>
-      <button class="nav-btn" data-page="qr">📱 Scan QR Code</button>
-      <button class="nav-btn" data-page="link">🔗 Analyze Payment Link</button>
-      <button class="nav-btn" data-page="txn">💳 New Transaction</button>
-      <button class="nav-btn" data-page="alerts">🔔 Alerts</button>
-      <button class="nav-btn" data-page="report">🚩 Report Fraud</button>
-    </nav>
-    <div class="sidebar-footer">Model: GBClassifier<br>Live protection: <span class="dot ok"></span> Active</div>
-  </aside>
 
-  <main class="content">
-    <!-- DASHBOARD -->
-    <section id="page-dashboard" class="page active">
-      <h1>Dashboard</h1>
-      <div class="cards">
-        <div class="card stat"><h3 id="st-total">–</h3><p>Transactions Analyzed</p></div>
-        <div class="card stat danger"><h3 id="st-high">–</h3><p>High-Risk Flagged</p></div>
-        <div class="card stat warn"><h3 id="st-blocked">–</h3><p>Blocked / Held</p></div>
-        <div class="card stat ok"><h3 id="st-avg">–</h3><p>Avg Risk Score</p></div>
-      </div>
-      <div class="card table-card">
-        <h2>Recent Transactions</h2>
-        <table id="txn-table">
-          <thead><tr><th>Ref</th><th>Payee</th><th>Amount</th><th>Source</th><th>Risk</th><th>Status</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- QR SCAN -->
-    <section id="page-qr" class="page">
-      <h1>Scan QR Code</h1>
-      <div class="card center">
-        <p class="muted">Scan a UPI QR code to analyze it for phishing before you pay.</p>
-        <div id="qr-viewfinder"><div class="qr-frame"><div class="scanline"></div>📷</div></div>
-        <button id="btn-scan" class="btn primary">Start Scan & Detect</button>
-      </div>
-    </section>
-
-    <!-- LINK ANALYSIS -->
-    <section id="page-link" class="page">
-      <h1>Analyze Payment Link</h1>
-      <div class="card">
-        <label>Payment URL / UPI ID</label>
-        <input id="link-input" placeholder="https://pay.example.xyz/upi?pa=fraud@ybl&am=4999  or  fraud@upi">
-        <div class="row">
-          <button id="btn-link" class="btn primary">Analyze Link</button>
-          <button id="btn-link-demo" class="btn ghost">Try a phishing sample</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- TRANSACTION -->
-    <section id="page-txn" class="page">
-      <h1>New Transaction</h1>
-      <div class="card form-grid">
-        <div><label>Amount (₹)</label><input id="t-amount" type="number" value="4999"></div>
-        <div><label>Recipient UPI ID</label><input id="t-upi" value="quickrewards@ybl"></div>
-        <div><label>Merchant / Payee Name</label><input id="t-name" value="Quick Rewards"></div>
-        <div><label>Location</label><input id="t-loc" value="Mumbai"></div>
-        <div class="row"><button id="btn-txn" class="btn primary">Analyze & Pay</button></div>
-      </div>
-    </section>
-
-    <!-- ALERTS -->
-    <section id="page-alerts" class="page">
-      <h1>Security Alerts</h1>
-      <div id="alert-list"></div>
-    </section>
-
-    <!-- REPORT -->
-    <section id="page-report" class="page">
-      <h1>Report Suspicious Recipient</h1>
-      <div class="card form-grid">
-        <div><label>UPI ID / Merchant</label><input id="r-upi" placeholder="fraud@upi"></div>
-        <div><label>Reason</label>
-          <select id="r-reason">
-            <option>Fake QR / payment handle</option><option>Merchant impersonation</option>
-            <option>Phishing link</option><option>Fraudulent collect request</option><option>Other</option>
-          </select></div>
-        <div><label>Details</label><textarea id="r-details" rows="3"></textarea></div>
-        <div class="row"><button id="btn-report" class="btn danger">Submit Report</button></div>
-        <p id="report-msg" class="muted"></p>
-      </div>
-    </section>
-
-    <!-- RESULT PAGE (QR / LINK / TXN flow lands here) -->
-    <section id="page-result" class="page">
-      <button class="btn ghost back" data-page="dashboard">← Back</button>
-      <div id="result-body"></div>
-    </section>
-  </main>
+<!-- ================= AUTH ================= -->
+<div id="authScreen" class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div class="logo">🛡️</div>
+      <h1>PhishGuard <span>UPI</span></h1>
+    </div>
+    <div class="auth-tabs">
+      <button id="tabLogin" class="active">Sign In</button>
+      <button id="tabSignup">Create Account</button>
+    </div>
+    <form id="loginForm" class="auth-form">
+      <label>Email
+        <span class="field-ico"><span class="ico">✉️</span>
+          <input id="li_email" type="email" autocomplete="off" placeholder="you@example.com" required></span></label>
+      <label>Password
+        <span class="field-ico"><span class="ico">🔑</span>
+          <input id="li_pw" type="password" placeholder="••••••••" required></span></label>
+      <button class="btn primary big" type="submit">Sign In</button>
+      <p id="li_err" class="form-err"></p>
+    </form>
+    <form id="signupForm" class="auth-form hidden">
+      <label>Full name
+        <span class="field-ico"><span class="ico">👤</span>
+          <input id="su_name" autocomplete="off" placeholder="e.g. Lochana B" required></span></label>
+      <label>Email
+        <span class="field-ico"><span class="ico">✉️</span>
+          <input id="su_email" type="email" autocomplete="off" placeholder="you@example.com" required></span></label>
+      <label>Phone (for SMS alerts)
+        <span class="field-ico"><span class="ico">📱</span>
+          <input id="su_phone" autocomplete="off" placeholder="+91XXXXXXXXXX" required></span></label>
+      <label>Password
+        <span class="field-ico"><span class="ico">🔑</span>
+          <input id="su_pw" type="password" placeholder="min 6 characters" required></span></label>
+      <button class="btn primary big" type="submit">Create Account</button>
+      <p id="su_err" class="form-err"></p>
+    </form>
+  </div>
 </div>
+
+<!-- ================= APP ================= -->
+<div id="appScreen" class="app hidden">
+  <header class="topbar">
+    <div class="brand">🛡️ PhishGuard <span>UPI</span></div>
+    <div class="user-chip" id="userChip"></div>
+  </header>
+  <div class="shell">
+    <aside class="sidebar">
+      <nav>
+        <button class="nav-btn active" data-page="dashboard">🏠 Dashboard</button>
+        <button class="nav-btn" data-page="transactions">💳 Transactions</button>
+        <button class="nav-btn" data-page="scan">📷 Scan QR</button>
+        <button class="nav-btn" data-page="link">🔗 Analyze Link</button>
+        <button class="nav-btn" data-page="pay">💸 Pay Anyone</button>
+        <button class="nav-btn" data-page="alerts">🔔 Alerts</button>
+        <button class="nav-btn" data-page="report">🚩 Report Fraud</button>
+      </nav>
+      <button id="logoutBtn" class="logout-btn">⏻ Log Out</button>
+    </aside>
+    <main class="content">
+
+      <!-- DASHBOARD -->
+      <section id="page-dashboard" class="page">
+        <div class="balance-card">
+          <div>
+            <div class="balance-label">Available Balance</div>
+            <div class="balance-row">
+              <span class="balance-amt" id="balAmount">₹ ••••••</span>
+              <button class="eye-btn" id="eyeBtn">👁</button>
+            </div>
+            <div class="balance-sub">PhishGuard Demo Bank •••• 4821</div>
+          </div>
+          <span class="balance-badge">🛡️ Fraud Protection Active</span>
+        </div>
+        <div class="tile-grid">
+          <button class="tile pay nav-go" data-page="pay"><span class="ico">💸</span>Pay Anyone</button>
+          <button class="tile scan nav-go" data-page="scan"><span class="ico">📷</span>Scan QR</button>
+          <button class="tile link nav-go" data-page="link"><span class="ico">🔗</span>Analyze Link</button>
+          <button class="tile report nav-go" data-page="report"><span class="ico">🚩</span>Report Fraud</button>
+        </div>
+        <div class="stat-grid" id="statGrid"></div>
+        <div class="card">
+          <h3>Recent Transactions <span class="live-dot">● LIVE</span></h3>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Date</th><th>Recipient</th><th>Amount</th><th>Risk</th><th>Status</th></tr></thead>
+            <tbody id="recentBody"></tbody>
+          </table></div>
+          <br>
+          <button class="btn ghost" id="viewAllBtn">View All Transactions →</button>
+        </div>
+      </section>
+
+      <!-- TRANSACTIONS -->
+      <section id="page-transactions" class="page hidden">
+        <h2 class="page-title">All Transactions</h2>
+        <div class="card">
+          <div class="filter-row">
+            <select id="txnFilter">
+              <option value="all">All</option>
+              <option value="Completed">Completed</option>
+              <option value="Pending">Pending</option>
+              <option value="Blocked">Blocked</option>
+              <option value="risk:High">⚠️ High Risk</option>
+              <option value="risk:Medium">Medium Risk</option>
+
+            </select>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Date</th><th>Recipient</th><th>UPI ID</th><th>Amount</th><th>Risk</th><th>Status</th></tr></thead>
+            <tbody id="txnBody"></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- SCAN QR -->
+      <section id="page-scan" class="page hidden">
+        <h2 class="page-title">Scan QR Code</h2>
+        <div class="card">
+          <div id="qrReader" class="qr-reader"></div>
+          <div class="row" style="justify-content:center">
+            <button id="startCam" class="btn primary">▶ Start Camera Scan</button>
+            <button id="stopCam" class="btn ghost hidden">■ Stop</button>
+            <label class="btn ghost file-btn">📷 Analyze QR Photo
+              <input id="qrPhoto" type="file" accept="image/*" hidden></label>
+          </div>
+        </div>
+        <div id="scanResult" class="hidden"></div>
+      </section>
+
+      <!-- ANALYZE LINK -->
+      <section id="page-link" class="page hidden">
+        <h2 class="page-title">Analyze Payment Link</h2>
+        <div class="card">
+          <div class="row">
+            <input id="linkInput" class="text-input" autocomplete="off"
+              placeholder="Paste UPI payment link or URL…">
+            <button id="analyzeLinkBtn" class="btn primary">Analyze</button>
+          </div>
+        </div>
+        <div id="linkResult" class="hidden"></div>
+      </section>
+
+      <!-- PAY ANYONE -->
+      <section id="page-pay" class="page hidden">
+        <h2 class="page-title">Pay Anyone</h2>
+        <div id="payStepForm" class="card pay-card">
+          <div class="pay-hero">
+            <div class="pay-avatar">⊕</div>
+            <div><b>New Payment</b><br>
+              <span style="opacity:.75;font-size:.78rem">UPI transfer • instant • protected</span></div>
+            <span class="balance-badge" style="margin-left:auto" id="payBalChip">Bal: ₹ —</span>
+          </div>
+          <label class="fld">Recipient UPI ID
+            <span class="field-ico"><span class="ico">👤</span>
+              <input id="payUpi" autocomplete="off" spellcheck="false" placeholder="name@bank"></span>
+            <div class="val-msg" id="payUpiMsg"></div></label>
+          <label class="fld">Recipient name
+            <span class="field-ico"><span class="ico">🏷️</span>
+              <input id="payName" autocomplete="off" placeholder="e.g. Sri Traders"></span></label>
+          <label class="fld">Amount
+            <span class="field-ico"><span class="ico">₹</span>
+              <input id="payAmt" type="number" min="1" autocomplete="off" placeholder="0.00"></span>
+            <div class="val-msg" id="payAmtMsg"></div></label>
+          <label class="fld">Note
+            <textarea id="payNote" rows="3" autocomplete="off"
+              placeholder="Add a message for the recipient (optional)"></textarea></label>
+          <button id="payBtn" class="btn primary big">Proceed to Pay →</button>
+          <div class="secure-note">🔒 Verified by PhishGuard real-time fraud engine</div>
+        </div>
+
+        <div id="payStepVerify" class="card pay-card hidden">
+          <h3>🔐 Extra Verification Required</h3>
+          <div class="risk-banner high">This payment was flagged. Confirm it's really you.</div>
+          <ul id="verReasons" class="reasons"></ul>
+          <input id="verCode" class="text-input center" maxlength="6"
+            autocomplete="one-time-code" placeholder="• • • • • •">
+          <button id="verSubmit" class="btn primary big">Verify &amp; Authorize</button>
+        </div>
+
+        <div id="payStepDone" class="card pay-card hidden">
+          <div class="success-ring">✔</div>
+          <h3 style="text-align:center">Payment Successful</h3>
+          <p class="muted" style="text-align:center" id="doneMeta"></p>
+          <button id="doneAgain" class="btn ghost big">Make another payment</button>
+        </div>
+
+        <div id="payStepBlocked" class="card pay-card hidden">
+          <div class="blocked-ring">⛔</div>
+          <h3 style="text-align:center">Payment Blocked</h3>
+          <div class="risk-banner high">High risk — authorization paused for your safety.</div>
+          <ul id="blkReasons" class="reasons"></ul>
+          <button id="blkBack" class="btn ghost big">← Back</button>
+        </div>
+      </section>
+
+      <!-- ALERTS -->
+      <section id="page-alerts" class="page hidden">
+        <h2 class="page-title">Alerts &amp; Notifications</h2>
+        <div class="card"><div id="alertList"></div></div>
+      </section>
+
+      <!-- REPORT FRAUD -->
+      <section id="page-report" class="page hidden">
+        <h2 class="page-title">Report Fraud</h2>
+        <div class="card">
+          <label class="fld">Category</label>
+          <div class="chip-row" id="repCats">
+            <button class="chip sel" data-cat="Phishing QR code">Phishing QR code</button>
+            <button class="chip" data-cat="Fake merchant">Fake merchant</button>
+            <button class="chip" data-cat="Payment link scam">Payment link scam</button>
+            <button class="chip" data-cat="Fake customer care">Fake customer care</button>
+            <button class="chip" data-cat="Other">Other</button>
+          </div>
+          <label class="fld">UPI ID to report
+            <span class="field-ico"><span class="ico">⚠️</span>
+              <input id="repUpi" autocomplete="off" placeholder="fraudster@upi"></span></label>
+          <label class="fld">What happened?
+            <textarea id="repDetails" rows="4" autocomplete="off"
+              placeholder="Describe the incident — what was promised, what actually happened, and the amount involved…"></textarea></label>
+          <button id="repBtn" class="btn primary">🚩 Submit Report</button>
+          <p id="repMsg" class="form-ok hidden"></p>
+        </div>
+        <div class="card">
+          <h3>Your Previous Reports</h3>
+          <div id="repHistory"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ================= UPI PAYMENT SHEET ================= -->
+<div id="sheetBackdrop" class="sheet-backdrop hidden">
+  <div class="sheet">
+    <div class="sheet-head">
+      <b>Choose payment method</b>
+      <button class="sheet-close" id="sheetCancel">✕</button>
+    </div>
+    <div class="sheet-payee">
+      <div class="pay-avatar" id="sheetAvatar">S</div>
+      <div><b id="sheetName">—</b><br>
+        <span class="muted mono" id="sheetUpi">—</span></div>
+      <div class="sheet-amt" id="sheetAmt">₹0</div>
+    </div>
+    <button class="pay-app" data-app="Google Pay"><span class="app-ico" style="background:#1a73e8">G</span>Google Pay<span class="upi-tag">UPI</span></button>
+    <button class="pay-app" data-app="PhonePe"><span class="app-ico" style="background:#5f259f">P</span>PhonePe<span class="upi-tag">UPI</span></button>
+    <button class="pay-app" data-app="Paytm"><span class="app-ico" style="background:#00b9f1">₹</span>Paytm<span class="upi-tag">UPI</span></button>
+    <button class="pay-app" data-app="Paytm UPI Lite"><span class="app-ico" style="background:#0ea5e9">L</span>Paytm UPI Lite<span class="upi-tag">UPI</span></button>
+    <button class="pay-app" data-app="HDFC Bank"><span class="app-ico" style="background:#004c8f">H</span>HDFC Bank<span class="upi-tag">UPI</span></button>
+    <button class="pay-app" data-app="ICICI Bank"><span class="app-ico" style="background:#f37e20">I</span>ICICI Bank<span class="upi-tag">UPI</span></button>
+    <button class="pay-app" data-app="State Bank of India"><span class="app-ico" style="background:#280071">S</span>State Bank of India<span class="upi-tag">UPI</span></button>
+    <button class="pay-app" data-app="Axis Bank"><span class="app-ico" style="background:#97144d">A</span>Axis Bank<span class="upi-tag">UPI</span></button>
+  </div>
+</div>
+
+<!-- ================= PROCESSING OVERLAY ================= -->
+<div id="payProcessing" class="sheet-backdrop hidden">
+  <div class="sheet">
+    <div class="processing">
+      <div class="spinner"></div>
+      <b id="procText">Processing payment…</b>
+    </div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

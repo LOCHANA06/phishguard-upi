@@ -1,257 +1,546 @@
-import os, re, json, sqlite3, pickle, hashlib, random
+import os, sqlite3, json, pickle, random, string, socket, base64
 from datetime import datetime, timedelta
-from urllib.parse import urlparse, parse_qs, unquote
-from flask import Flask, request, jsonify, send_from_directory
-
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(APP_DIR, "phishguard.db")
-MODEL_PATH = os.path.join(APP_DIR, "phishguard_model.pkl")
+from functools import wraps
+import numpy as np
+import requests as rq
+import cv2
+from flask import Flask, request, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+from flask_cors import CORS
+CORS(app)
 
-# ---------------- Database ----------------
+DB = "phishguard.db"
+MODEL_FILE = "phishguard_model.pkl"
+START_BALANCE = 50000.0
+
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+TWILIO_SID     = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_TOKEN   = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM    = os.environ.get("TWILIO_FROM", "")
+
+# ---------------- DB ----------------
 def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    c = sqlite3.connect(DB)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys=ON")
+    return c
 
 def init_db():
+    """Create tables; self-heal legacy schemas from older versions of the app."""
     with db() as c:
+        tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+        # Drop old-version tables that lack user_id (they break inserts)
+        legacy = False
+        for t in ("recipients", "transactions", "reports"):
+            if t in tables:
+                cols = {r["name"] for r in c.execute(f"PRAGMA table_info({t})")}
+                if "user_id" not in cols:
+                    legacy = True
+                    break
+        if legacy:
+            for t in ("reports", "transactions", "recipients", "alerts"):
+                c.execute(f"DROP TABLE IF EXISTS {t}")
+
         c.executescript("""
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT UNIQUE,
+            phone TEXT, pw_hash TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS tokens(
+            token TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT);
         CREATE TABLE IF NOT EXISTS recipients(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            upi_id TEXT UNIQUE, name TEXT, verified INTEGER DEFAULT 0,
-            blacklisted INTEGER DEFAULT 0, first_seen TEXT,
-            txn_count INTEGER DEFAULT 0, total_amount REAL DEFAULT 0);
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, upi_id TEXT,
+            name TEXT, verified INTEGER DEFAULT 0, blacklisted INTEGER DEFAULT 0,
+            txn_count INTEGER DEFAULT 0, first_seen TEXT);
         CREATE TABLE IF NOT EXISTS transactions(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ref TEXT UNIQUE, amount REAL, upi_id TEXT, payee_name TEXT,
-            merchant_name TEXT, source TEXT, domain TEXT,
-            device_id TEXT, location TEXT, hour INTEGER,
-            risk_score REAL, risk_level TEXT, status TEXT,
-            reasons TEXT, created_at TEXT);
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, upi_id TEXT,
+            name TEXT, amount REAL, note TEXT, risk INTEGER, level TEXT,
+            status TEXT, reasons TEXT, created_at TEXT);
         CREATE TABLE IF NOT EXISTS reports(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            upi_id TEXT, reason TEXT, details TEXT, created_at TEXT);
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, upi_id TEXT,
+            category TEXT, details TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS alerts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, level TEXT,
+            title TEXT, body TEXT, channels TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS otps(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, pay_ref TEXT,
+            code TEXT, expires_at TEXT, used INTEGER DEFAULT 0);
         """)
-        seed = [
-            ("swiggy@icici",  "Swiggy",        1, 0),
-            ("amazonpay@apl", "Amazon Pay",    1, 0),
-            ("paytmqr@ptys",  "Paytm Merchant",1, 0),
-            ("quickrewards@ybl", "Quick Rewards",0, 1),
-            ("fastag.kyc@okaxis","FASTag KYC Desk",0, 1),
-        ]
-        known = [
-            ("rahul@okhdfc", "Rahul Sharma", 1, 0),
-            ("mom@ybl", "Sunita Verma", 1, 0),
-        ]
-        now = datetime.utcnow().isoformat()
-        for upi, name, v, b in seed + known:
-            c.execute("INSERT OR IGNORE INTO recipients(upi_id,name,verified,blacklisted,first_seen,txn_count,total_amount) VALUES(?,?,?,?,?,?,?)",
-                      (upi, name, v, b, now, 0, 0))
-        # user history so "unusual amount / frequency" works out of the box
-        for i in range(14):
-            c.execute("INSERT OR IGNORE INTO transactions(ref,amount,upi_id,payee_name,merchant_name,source,domain,device_id,location,hour,risk_score,risk_level,status,reasons,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                      (f"HIST{i:03d}", random.choice([120,250,340,480,650]), "swiggy@icici", "Swiggy", "Swiggy",
-                       "app", "", "DEV001", "Mumbai", 13, 12.0, "Low", "allowed", "[]",
-                       (datetime.utcnow()-timedelta(days=i+1)).isoformat()))
 
-# ---------------- ML model ----------------
-with open(MODEL_PATH, "rb") as f:
-    _m = pickle.load(f)
-MODEL, FEATURE_NAMES = _m["model"], _m["features"]
+        # add balance column to existing users table if missing
+        ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
+        if "balance" not in ucols:
+            c.execute(f"ALTER TABLE users ADD COLUMN balance REAL DEFAULT {START_BALANCE}")
 
-# ---------------- Domain / link intelligence ----------------
-TRUSTED_DOMAINS = {"paytm.com","razorpay.com","phonepe.com","bharatpe.com","amazonpay.in",
-                   "pay.google.com","cashfree.com","billdesk.com","juspay.in","paypal.com"}
-SUSPICIOUS_TLDS = {"tk","xyz","top","buzz","click","loan","icu","cf","ml","ga","gq","work","fit"}
-PHISH_KEYWORDS = ["kyc","verify","suspend","blocked","refund","lottery","cashback","urgent",
-                  "winner","reward","updat","secure","login","otp","limit","restore"]
+# ---------------- auth helper ----------------
+def auth(f):
+    @wraps(f)
+    def w(*a, **k):
+        tok = request.headers.get("Authorization", "").replace("Bearer ", "")
+        with db() as c:
+            row = c.execute("SELECT user_id FROM tokens WHERE token=?", (tok,)).fetchone()
+        if not row:
+            return jsonify(error="unauthorized"), 401
+        request.user_id = row["user_id"]
+        return f(*a, **k)
+    return w
 
-def _sigmoid(x): return 1/(1+np_exp(-x)) if (np_exp:=__import__("math").exp) else 0
-
-def domain_trust_score(domain):
-    if not domain: return 0.5
-    d = domain.lower()
-    if d in TRUSTED_DOMAINS: return 1.0
-    tld = d.rsplit(".",1)[-1]
-    if tld in SUSPICIOUS_TLDS: return 0.05
-    if re.match(r"^\d+\.\d+\.\d+\.\d+$", d): return 0.02
-    if any(k in d for k in ["paytm","phonepe","upi"]) and d not in TRUSTED_DOMAINS: return 0.1  # lookalike
-    return 0.45
-
-def analyze_link_signals(url):
-    sig, reasons = {}, []
-    try:
-        p = urlparse(url if "//" in url else "//"+url, scheme="http")
-        host, path = (p.netloc or "").lower(), (p.path or "") + (p.query or "")
-    except Exception:
-        host, path, url = "", "", url
-    sig["ip_host"] = 1 if re.match(r"^\d+\.\d+\.\d+\.\d+$", host) else 0
-    tld = host.rsplit(".",1)[-1] if "." in host else ""
-    sig["suspicious_tld"] = 1 if tld in SUSPICIOUS_TLDS else 0
-    hits = [k for k in PHISH_KEYWORDS if k in url.lower()]
-    sig["link_keywords"] = 1 if hits else 0
-    sig["domain_trust"] = domain_trust_score(host)
-    if sig["ip_host"]: reasons.append(f"The payment link uses a raw IP address ({host}) instead of a genuine domain.")
-    if sig["suspicious_tld"]: reasons.append(f"The domain uses a high-risk '.{tld}' extension commonly abused in phishing.")
-    if hits: reasons.append(f"The link contains phishing keywords: {', '.join(hits[:3])}.")
-    if sig["domain_trust"] < 0.2 and not sig["ip_host"]:
-        reasons.append(f"The domain '{host}' is untrusted or impersonates a payment provider.")
-    return sig, reasons, host
-
-def parse_upi_payload(text):
-    """Parse upi://pay?pa=...&pn=...&am=... or a raw upi id."""
-    text = unquote(text or "").strip()
-    if text.lower().startswith("upi://"):
-        q = parse_qs(urlparse(text).query)
-        return q.get("pa",[""])[0], q.get("pn",[""])[0], q.get("am",[None])[0], q.get("cu",[""])[0], text
-    if "@" in text:
-        return text, "", None, "", text
-    return "", "", None, "", text
-
-def name_similarity(a, b):
-    a, b = (a or "").lower().strip(), (b or "").strip().lower()
-    if not a or not b: return 1.0
-    return 1.0 if a == b else (0.5 if a in b or b in a else 0.0)
-
-# ---------------- Core risk engine ----------------
-def analyze_transaction(data):
-    upi_id, payee, amt_str, _cu, raw = parse_upi_payload(data.get("payload") or data.get("upi_id",""))
-    try: amount = float(amt_str or data.get("amount") or 0)
-    except ValueError: amount = 0.0
-    merchant = (data.get("merchant_name") or payee or "").strip()
-    source   = data.get("source","app")            # qr | link | app
-    device   = data.get("device_id","DEV001")
-    location = data.get("location","Mumbai")
-    url      = data.get("url","")
-    domain, host = "", ""
-    link_reasons = []
-    if source == "link" and url:
-        lsig, link_reasons, host = analyze_link_signals(url)
-        domain = host
-    else:
-        lsig = {"ip_host":0,"suspicious_tld":0,"link_keywords":0,"domain_trust":0.5}
-
+def seed_transactions(uid):
+    """Seed 50 realistic sample transactions, then set balance so it tallies."""
+    names = ["Swiggy", "Amazon Pay", "Flipkart", "Zomato", "Airtel", "Jio Recharge",
+             "Uber", "IRCTC", "BigBasket", "Domino's", "BookMyShow", "Paytm Merchant",
+             "RedBus", "Netflix", "Spotify", "Croma", "Reliance Digital", "Myntra",
+             "Ajio", "KFC", "Vendors Mart", "Sri Traders", "Green Grocers",
+             "MedPlus", "Apollo Pharmacy"]
     now = datetime.utcnow()
+    rows = []
+    for _ in range(50):
+        d = now - timedelta(days=random.randint(0, 45), hours=random.randint(0, 23))
+        amt = round(random.choice([49, 99, 149, 199, 249, 399, 549, 699, 999, 1499, 2499])
+                    * random.uniform(0.8, 1.4), 2)
+        n = random.choice(names)
+        risk = random.choices([random.randint(2, 25), random.randint(40, 64),
+                               random.randint(70, 95)], weights=[82, 13, 5])[0]
+        level = "Low" if risk < 35 else ("Medium" if risk < 70 else "High")
+        status = "Completed" if risk < 70 else random.choice(["Blocked", "Completed"])
+        upi = n.lower().replace(" ", "").replace("'", "") + "@upi"
+        rows.append((uid, upi, n, amt,
+                     random.choice(["Payment", "Order", "Recharge", "Bill", "Food"]),
+                     risk, level, status, json.dumps([]), d.isoformat()))
     with db() as c:
-        rec = c.execute("SELECT * FROM recipients WHERE upi_id=?", (upi_id,)).fetchone()
-        hist = c.execute("SELECT amount, device_id, location, created_at FROM transactions WHERE status='allowed' ORDER BY id DESC LIMIT 30").fetchall()
-        vel_24h = c.execute("SELECT COUNT(*) n FROM transactions WHERE created_at > ?",
-                            ((now-timedelta(hours=24)).isoformat(),)).fetchone()["n"]
+        c.executemany("""INSERT INTO transactions
+            (user_id,upi_id,name,amount,note,risk,level,status,reasons,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""", rows)
+        # balance = start minus every completed seeded payment
+        spent = c.execute("""SELECT COALESCE(SUM(amount),0) s FROM transactions
+                             WHERE user_id=? AND status='Completed'""", (uid,)).fetchone()["s"]
+        c.execute("UPDATE users SET balance=? WHERE id=?", (START_BALANCE - spent, uid))
 
-    verified    = rec["verified"] if rec else 0
-    blacklisted = rec["blacklisted"] if rec else 0
-    txn_count   = rec["txn_count"] if rec else 0
-    age_days    = max((now - datetime.fromisoformat(rec["first_seen"])).days, 0) if rec else 0
-    name_match  = 0.0
-    name_mismatch = 0
-    if rec and merchant:
-        name_match = name_similarity(rec["name"], merchant)
-        name_mismatch = 0 if name_match >= 0.5 else 1
-    known_devices = {h["device_id"] for h in hist}
-    known_locs    = {h["location"] for h in hist}
-    new_device, new_location = int(device not in known_devices), int(location not in known_locs)
-    amounts = [h["amount"] for h in hist if h["amount"]]
-    avg_amt = sum(amounts)/len(amounts) if amounts else amount or 300
-    amount_anomaly = int(amount > max(3*avg_amt, avg_amt+2000)) if amount else 0
-    odd_hour = 1 if now.hour < 6 or now.hour >= 23 else 0
-    velocity = min(vel_24h/10.0, 1.0)
-    import math
-    log_amount = math.log10(max(amount, 1))
-
-    feats = [[log_amount, odd_hour, min(txn_count,10)/10, min(age_days,365)/365,
-              new_device, new_location, velocity, verified, blacklisted, name_mismatch,
-              lsig["domain_trust"], lsig["ip_host"], lsig["suspicious_tld"],
-              lsig["link_keywords"], amount_anomaly]]
-    ml_prob = float(MODEL.predict_proba(feats)[0][1])
-
-    # ---- Rule engine: human-readable reasons ----
-    reasons = list(link_reasons)
-    if blacklisted: reasons.append("The recipient has been reported by users and is on the fraud blacklist.")
-    if not rec:     reasons.append(f"The recipient '{upi_id or 'unknown'}' is not in your payment history or the verified merchant directory.")
-    if name_mismatch: reasons.append(f"Merchant name '{merchant}' does not match registered payee '{rec['name']}'.")
-    if amount_anomaly: reasons.append(f"The amount ₹{amount:,.0f} is far higher than your normal pattern (avg ₹{avg_amt:,.0f}).")
-    if odd_hour: reasons.append("This payment is being made at an unusual time (late night/early morning).")
-    if new_device: reasons.append("The payment request comes from a device not previously used.")
-    if new_location: reasons.append("The transaction originates from an unfamiliar location.")
-    if velocity >= 0.5: reasons.append("Unusually high number of payment attempts in the last 24 hours.")
-    if source == "qr" and not rec: reasons.append("The QR code redirects to an unfamiliar payment handle.")
-    if amount == 0 and source == "qr": reasons.append("The QR code has no amount pinned — attackers often edit it later.")
-
-    rule_score = min(1.0, 0.22*blacklisted + 0.25*(0 if rec else 1) + 0.2*name_mismatch +
-                     0.15*amount_anomaly + 0.08*odd_hour + 0.08*new_device + 0.05*new_location +
-                     0.2*(1-lsig["domain_trust"]) + 0.1*lsig["ip_host"] + 0.05*velocity)
-    risk = round(min(99.0, 100*(0.62*ml_prob + 0.38*rule_score) + random.uniform(-1.5,1.5)), 1)
-    risk = max(3.0, risk)
-    level = "High" if risk >= 70 else ("Medium" if risk >= 35 else "Low")
-    status = "blocked" if risk >= 85 else ("needs_confirmation" if risk >= 70 else "allowed")
-    reasons = reasons[:4] if level != "High" else reasons[:5] or ["Behavioral model flagged this transaction as anomalous."]
-
-    ref = "TXN" + hashlib.md5((raw+str(now)).encode()).hexdigest()[:8].upper()
+def ensure_user_seeded(uid):
     with db() as c:
-        c.execute("INSERT INTO transactions(ref,amount,upi_id,payee_name,merchant_name,source,domain,device_id,location,hour,risk_score,risk_level,status,reasons,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (ref, amount, upi_id, payee, merchant, source, domain, device, location, now.hour,
-                   risk, level, status, json.dumps(reasons), now.isoformat()))
-        if rec and status == "allowed":
-            c.execute("UPDATE recipients SET txn_count=txn_count+1, total_amount=total_amount+? WHERE upi_id=?", (amount, upi_id))
-    return {"ref": ref, "risk_score": risk, "risk_level": level, "status": status,
-            "reasons": reasons, "upi_id": upi_id, "amount": amount,
-            "merchant": merchant, "source": source, "domain": domain,
-            "recommended_action": {
-                "blocked": "Transaction BLOCKED. Do not retry. Report this recipient immediately.",
-                "needs_confirmation": "Verify this payment with an extra confirmation step before it proceeds.",
-                "allowed": "Safe to proceed. No action needed."}[status]}
+        exists = c.execute("SELECT 1 FROM transactions WHERE user_id=? LIMIT 1",
+                           (uid,)).fetchone()
+    if not exists:
+        seed_transactions(uid)
 
-# ---------------- API ----------------
-@app.post("/api/analyze")
-def api_analyze():
-    return jsonify(analyze_transaction(request.get_json(force=True)))
+# ---------------- alerts ----------------
+def send_email(to, subject, body):
+    if not RESEND_API_KEY:
+        return "skipped (no RESEND_API_KEY)"
+    try:
+        r = rq.post("https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+                    json={"from": "onboarding@resend.dev", "to": [to],
+                          "subject": subject, "text": body}, timeout=10)
+        return "email sent" if r.ok else f"email failed ({r.status_code})"
+    except Exception as e:
+        return f"email error: {e}"
 
-@app.post("/api/confirm/<ref>")
-def api_confirm(ref):
+def send_sms(to, body):
+    if not (TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM):
+        return "skipped (no Twilio keys)"
+    try:
+        r = rq.post(f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json",
+                    auth=(TWILIO_SID, TWILIO_TOKEN),
+                    data={"From": TWILIO_FROM, "To": to, "Body": body}, timeout=10)
+        return "sms sent" if r.ok else f"sms failed ({r.status_code})"
+    except Exception as e:
+        return f"sms error: {e}"
+
+def push_alert(uid, level, title, body):
     with db() as c:
-        row = c.execute("SELECT * FROM transactions WHERE ref=?", (ref,)).fetchone()
-        if not row: return jsonify({"error":"not found"}), 404
-        c.execute("UPDATE transactions SET status='confirmed_allowed' WHERE ref=?", (ref,))
-        if row["upi_id"]:
-            c.execute("UPDATE recipients SET txn_count=txn_count+1, total_amount=total_amount+? WHERE upi_id=?",
-                      (row["amount"], row["upi_id"]))
-    return jsonify({"ref": ref, "status": "confirmed_allowed", "message": "Payment authorized after verification."})
+        u = c.execute("SELECT email, phone FROM users WHERE id=?", (uid,)).fetchone()
+    ch = ["in-app"]
+    if level in ("Medium", "High") and u:
+        ch.append(send_email(u["email"], f"PhishGuard {level} Alert: {title}", body))
+        ch.append(send_sms(u["phone"], f"PhishGuard {level} Alert: {title}"))
+    with db() as c:
+        c.execute("""INSERT INTO alerts(user_id,level,title,body,channels,created_at)
+                     VALUES(?,?,?,?,?,?)""",
+                  (uid, level, title, body, json.dumps(ch), datetime.utcnow().isoformat()))
+    return ch
 
-@app.post("/api/report")
-def api_report():
+# ---------------- risk engine ----------------
+model = None
+try:
+    with open(MODEL_FILE, "rb") as fh:
+        model = pickle.load(fh)
+except Exception:
+    pass
+
+TRUSTED = {"paytm.com", "amazonpay.in", "phonepe.com", "googlepay.com",
+           "bharatpe.in", "swiggy.com"}
+PHISH_WORDS = ["kyc", "verify", "suspend", "refund", "lucky", "winner",
+               "urgent", "otp", "block", "bonus"]
+BAD_TLDS = ("tk", "xyz", "top", "club", "online", "site", "info", "buzz", "icu")
+
+def domain_intel(domain):
+    out = {"resolves": False, "age_days": None, "http_ok": False}
+    if not domain:
+        return out
+    try:
+        socket.getaddrinfo(domain, 443)
+        out["resolves"] = True
+    except Exception:
+        pass
+    try:
+        r = rq.get(f"https://rdap.org/domain/{domain}", timeout=6,
+                   headers={"Accept": "application/rdap+json"})
+        if r.ok:
+            for ev in r.json().get("events", []):
+                if ev.get("eventAction") == "registration":
+                    out["age_days"] = (datetime.utcnow() -
+                        datetime.strptime(ev["eventDate"][:10], "%Y-%m-%d")).days
+    except Exception:
+        pass
+    try:
+        r = rq.head(f"https://{domain}", timeout=5, allow_redirects=True)
+        out["http_ok"] = r.status_code < 500
+    except Exception:
+        pass
+    return out
+
+def analyze_payload(uid, data):
+    v = (data.get("value") or "").strip()
+    amount = float(data.get("amount") or 0)
+    reasons, score = [], 0
+    low = v.lower()
+
+    upi = ""
+    if "@" in v:
+        for tok in v.replace("?", " ").replace("=", " ").replace("&", " ").split():
+            if "@" in tok:
+                upi = tok.split("/")[-1]
+                break
+    with db() as c:
+        rec = (c.execute("SELECT * FROM recipients WHERE upi_id=? AND user_id=?",
+                         (upi, uid)).fetchone() if upi else None)
+        known = rec is not None
+        verified = bool(rec and rec["verified"])
+        blacklisted = bool(rec and rec["blacklisted"])
+        txn_count = rec["txn_count"] if rec else 0
+        first_seen = rec["first_seen"] if rec else None
+        avg = (c.execute("SELECT AVG(amount) a FROM transactions WHERE user_id=?",
+                         (uid,)).fetchone()["a"]) or 300
+
+    if blacklisted:
+        reasons.append("Recipient was reported earlier and is blacklisted.")
+        score += 55
+    if upi and not known:
+        reasons.append(f"Unfamiliar recipient handle ({upi}) — no prior transaction history.")
+        score += 22
+    if upi and known and not verified and txn_count < 2:
+        reasons.append("Recipient has limited transaction history with you.")
+        score += 12
+    if amount > max(avg * 3, 1000):
+        reasons.append(f"Amount ₹{amount:,.0f} is far above your normal pattern (~₹{avg:,.0f}).")
+        score += 18
+    h = datetime.now().hour
+    if 0 <= h < 6:
+        reasons.append("Transaction attempted during unusual hours (12–6 AM).")
+        score += 10
+
+    domain = ""
+    if low.startswith("http") or "www." in low:
+        try:
+            domain = v.split("//")[1].split("/")[0].replace("www.", "")
+        except Exception:
+            pass
+    if domain:
+        intel = domain_intel(domain)
+        if domain.split(".")[-1] in BAD_TLDS:
+            reasons.append(f"Domain uses a high-risk extension (.{domain.split('.')[-1]}).")
+            score += 20
+        if "upi" in domain or "pay" in domain:
+            reasons.append("Domain impersonates a payment brand in its name.")
+            score += 15
+        if any(wd in low for wd in PHISH_WORDS):
+            reasons.append("Payment link contains phishing keywords (kyc/verify/urgent).")
+            score += 18
+        if not intel["resolves"]:
+            reasons.append("Domain does not resolve in DNS — likely fake or expired.")
+            score += 25
+        elif intel["age_days"] is not None and intel["age_days"] < 30:
+            reasons.append(f"Domain registered only {intel['age_days']} days ago.")
+            score += 20
+        if intel["age_days"] is not None and intel["age_days"] > 365:
+            score -= 8
+
+    if data.get("type") == "qr" and "upi://" in low and "pa=" not in low:
+        reasons.append("QR payload is not a valid UPI deep-link (missing pa= parameter).")
+        score += 20
+
+    score = max(2, min(97, score))
+
+    if model is not None and amount > 0:
+        try:
+            feats = np.array([[np.log1p(amount), 1 if 0 <= h < 6 else 0, txn_count / 10,
+                               30 if not first_seen else
+                               (datetime.utcnow() - datetime.fromisoformat(first_seen)).days,
+                               0, 0, 0.1, 1 if verified else 0, 1 if blacklisted else 0,
+                               0, 0.8 if domain in TRUSTED else 0.2,
+                               0, 0, 1 if any(wd in low for wd in PHISH_WORDS) else 0,
+                               1 if amount > avg * 3 else 0]])
+            p = float(model.predict_proba(feats)[0][1])
+            score = int(round(0.62 * p * 100 + 0.38 * score))
+            score = max(2, min(97, score))
+        except Exception:
+            pass
+
+    level = "Low" if score < 35 else ("Medium" if score < 70 else "High")
+    if level == "High" and not reasons:
+        reasons.append("ML model flags this pattern as matching known phishing behaviour.")
+    return {"risk": score, "level": level, "reasons": reasons, "upi": upi, "domain": domain}
+
+# ---------------- auth routes ----------------
+@app.post("/api/signup")
+def signup():
+    d = request.get_json(force=True)
+    name = d.get("name", "").strip()
+    email = d.get("email", "").strip().lower()
+    phone = d.get("phone", "").strip()
+    pw = d.get("password", "")
+    if not (name and email and phone and len(pw) >= 6):
+        return jsonify(error="All fields required; password min 6 chars."), 400
+    if not email.endswith(".com") and "@" not in email:
+        return jsonify(error="Enter a valid email address."), 400
+    with db() as c:
+        if c.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+            return jsonify(error="Email already registered — please sign in."), 400
+        cur = c.execute("""INSERT INTO users(name,email,phone,pw_hash,balance,created_at)
+                           VALUES(?,?,?,?,?,?)""",
+                        (name, email, phone, generate_password_hash(pw),
+                         START_BALANCE, datetime.utcnow().isoformat()))
+        uid = cur.lastrowid
+    seed_transactions(uid)
+    push_alert(uid, "Low", "Welcome to PhishGuard",
+               f"Account created for {name}. Real-time UPI protection is now active.")
+    return auth_response(uid, name)
+
+@app.post("/api/login")
+def login():
     d = request.get_json(force=True)
     with db() as c:
-        c.execute("INSERT INTO reports(upi_id,reason,details,created_at) VALUES(?,?,?,?)",
-                  (d.get("upi_id",""), d.get("reason",""), d.get("details",""), datetime.utcnow().isoformat()))
-        if d.get("upi_id"):
-            c.execute("UPDATE recipients SET blacklisted=1 WHERE upi_id=?", (d["upi_id"],))
-    return jsonify({"message": "Report submitted. Recipient flagged for review."})
+        u = c.execute("SELECT * FROM users WHERE email=?",
+                      (d.get("email", "").strip().lower(),)).fetchone()
+    if not u or not check_password_hash(u["pw_hash"], d.get("password", "")):
+        return jsonify(error="Invalid email or password."), 401
+    ensure_user_seeded(u["id"])
+    return auth_response(u["id"], u["name"])
 
+def auth_response(uid, name):
+    tok = "".join(random.choices(string.ascii_letters + string.digits, k=48))
+    with db() as c:
+        c.execute("INSERT INTO tokens(token,user_id,created_at) VALUES(?,?,?)",
+                  (tok, uid, datetime.utcnow().isoformat()))
+    return jsonify(token=tok, user={"id": uid, "name": name})
+
+
+@app.post("/api/logout")
+@auth
+def logout():
+    tok = request.headers.get("Authorization", "").replace("Bearer ", "")
+    with db() as c:
+        c.execute("DELETE FROM tokens WHERE token=?", (tok,))
+    return jsonify(ok=True)
+
+# ---------------- dashboard ----------------
 @app.get("/api/dashboard")
-def api_dashboard():
+@auth
+def dashboard():
+    uid = request.user_id
     with db() as c:
-        txns = [dict(r) for r in c.execute("SELECT * FROM transactions ORDER BY id DESC LIMIT 25")]
-        stats = dict(c.execute("""SELECT COUNT(*) total,
-            SUM(CASE WHEN risk_level='High' THEN 1 ELSE 0 END) high,
-            SUM(CASE WHEN status='blocked' THEN 1 ELSE 0 END) blocked,
-            SUM(CASE WHEN status='allowed' THEN 1 ELSE 0 END) allowed,
-            AVG(risk_score) avg_risk FROM transactions""").fetchone())
-        alerts = [t for t in txns if t["risk_level"] in ("High","Medium")]
-    return jsonify({"transactions": txns, "alerts": alerts, "stats": stats})
+        txns = c.execute("""SELECT * FROM transactions WHERE user_id=?
+                            ORDER BY created_at DESC LIMIT 60""", (uid,)).fetchall()
+        stats = c.execute("""
+            SELECT COUNT(*) total, COALESCE(SUM(amount),0) vol,
+                   SUM(CASE WHEN risk>=70 THEN 1 ELSE 0 END) high,
+                   SUM(CASE WHEN risk>=35 AND risk<70 THEN 1 ELSE 0 END) med,
+                   SUM(CASE WHEN status='Completed' THEN 1 ELSE 0 END) completed
+                   FROM transactions WHERE user_id=?""", (uid,)).fetchone()
+        al = c.execute("SELECT COUNT(*) n FROM alerts WHERE user_id=?", (uid,)).fetchone()["n"]
+        bal = c.execute("SELECT balance FROM users WHERE id=?", (uid,)).fetchone()["balance"]
+    return jsonify(stats={"total": stats["total"], "volume": round(stats["vol"], 2),
+                          "high": stats["high"], "medium": stats["med"],
+                          "completed": stats["completed"], "alerts": al,
+                          "balance": round(bal, 2)},
+                   transactions=[dict(t) for t in txns])
 
-@app.get("/api/recipients")
-def api_recipients():
+# ---------------- QR decode (server-side OpenCV fallback) ----------------
+@app.post("/api/decode")
+@auth
+def decode_qr_photo():
+    img_b64 = request.get_json(force=True).get("image", "")
+    try:
+        arr = np.frombuffer(base64.b64decode(img_b64.split(",")[-1]), np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return jsonify(error="Could not read image."), 400
+        det = cv2.QRCodeDetector()
+        # try original, then preprocessed variants (phone photos are tricky)
+        for frame in _qr_variants(img):
+            data, _, _ = det.detectAndDecode(frame)
+            if data:
+                return jsonify(value=data)
+        return jsonify(error="No QR code found in the photo."), 400
+    except Exception:
+        return jsonify(error="Could not process image."), 400
+
+def _qr_variants(img):
+    yield img
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    yield gray
+    h, w = gray.shape
+    if max(h, w) > 1400:
+        s = 1400 / max(h, w)
+        gray = cv2.resize(gray, (int(w * s), int(h * s)))
+    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    yield th
+    yield cv2.resize(th, None, fx=0.5, fy=0.5)
+
+# ---------------- analyze ----------------
+@app.post("/api/analyze")
+@auth
+def analyze():
+    d = request.get_json(force=True)
+    res = analyze_payload(request.user_id, d)
+    if res["level"] == "High":
+        push_alert(request.user_id, "High", "Potential phishing detected",
+                   f"Risk {res['risk']}/100 — " + " ".join(res["reasons"][:2]))
+    return jsonify(res)
+
+# ---------------- pay ----------------
+@app.post("/api/pay")
+@auth
+def pay():
+    d = request.get_json(force=True)
+    uid = request.user_id
+    upi = d.get("upi_id", "").strip()
+    amt = float(d.get("amount") or 0)
+    if not upi or "@" not in upi or amt <= 0:
+        return jsonify(error="Enter a valid UPI ID and amount."), 400
+    res = analyze_payload(uid, {"type": "pay", "value": upi, "amount": amt})
     with db() as c:
-        return jsonify([dict(r) for r in c.execute("SELECT * FROM recipients")])
+        rec = c.execute("SELECT name, verified FROM recipients WHERE upi_id=? AND user_id=?",
+                        (upi, uid)).fetchone()
+    name = d.get("name") or (rec["name"] if rec else upi.split("@")[0].title())
+    if rec and rec["verified"]:
+        res["reasons"] = []
+    pay_ref = "PG" + "".join(random.choices(string.digits, k=10))
+    status = ("blocked" if res["level"] == "High"
+              else "success" if res["level"] == "Low" else "verify")
+
+    if status == "success":
+        with db() as c:
+            bal = c.execute("SELECT balance FROM users WHERE id=?", (uid,)).fetchone()["balance"]
+            if bal < amt:
+                return jsonify(error="Insufficient balance."), 400
+            c.execute("UPDATE users SET balance=balance-? WHERE id=?", (amt, uid))
+        push_alert(uid, "Low", f"Payment of ₹{amt:,.0f} completed",
+                   f"Paid to {upi} ({name}).")
+    elif status == "verify":
+        code = "".join(random.choices(string.digits, k=6))
+        with db() as c:
+            c.execute("""INSERT INTO otps(user_id,pay_ref,code,expires_at)
+                         VALUES(?,?,?,?)""",
+                      (uid, pay_ref, code,
+                       (datetime.utcnow() + timedelta(minutes=5)).isoformat()))
+        push_alert(uid, "Medium", f"Verify payment of ₹{amt:,.0f}",
+                   f"Confirmation code: {code} (valid 5 min). Recipient: {upi}.")
+        res["dev_code"] = code   # shown only when no email/SMS provider is configured
+
+    with db() as c:
+        c.execute("""INSERT INTO transactions
+            (user_id,upi_id,name,amount,note,risk,level,status,reasons,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                  (uid, upi, name, amt, d.get("note", "Payment"), res["risk"],
+                   res["level"],
+                   {"success": "Completed", "verify": "Pending",
+                    "blocked": "Blocked"}[status],
+                   json.dumps(res["reasons"]), datetime.utcnow().isoformat()))
+    return jsonify(pay_ref=pay_ref,
+                   recipient={"upi": upi, "name": name}, amount=amt,
+                   status=status, **res)
+
+@app.post("/api/pay/confirm")
+@auth
+def pay_confirm():
+    d = request.get_json(force=True)
+    with db() as c:
+        o = c.execute("""SELECT * FROM otps WHERE pay_ref=? AND user_id=? AND used=0
+                         ORDER BY id DESC""", (d.get("pay_ref"), request.user_id)).fetchone()
+        if not o:
+            return jsonify(error="No pending verification."), 400
+        if o["code"] != (d.get("code", "").strip()):
+            return jsonify(error="Incorrect code."), 400
+        if datetime.fromisoformat(o["expires_at"]) < datetime.utcnow():
+            return jsonify(error="Code expired — start the payment again."), 400
+        c.execute("UPDATE otps SET used=1 WHERE id=?", (o["id"],))
+        # complete the pending txn exactly once, and deduct exactly once
+        cur = c.execute("""UPDATE transactions SET status='Completed'
+                           WHERE user_id=? AND upi_id=? AND status='Pending'""",
+                        (request.user_id, d.get("upi_id", "")))
+        if cur.rowcount:
+            amt = float(d.get("amount") or 0)
+            c.execute("""UPDATE users SET balance=balance-?
+                         WHERE id=? AND balance>=?""", (amt, request.user_id, amt))
+    push_alert(request.user_id, "Low", "Payment authorized after verification",
+               f"Payment {d.get('pay_ref')} completed after extra confirmation.")
+    return jsonify(ok=True, status="success")
+
+# ---------------- alerts ----------------
+@app.get("/api/alerts")
+@auth
+def alerts():
+    with db() as c:
+        rows = c.execute("""SELECT * FROM alerts WHERE user_id=?
+                            ORDER BY id DESC LIMIT 40""", (request.user_id,)).fetchall()
+    return jsonify(alerts=[dict(a) for a in rows])
+
+# ---------------- reports ----------------
+@app.post("/api/report")
+@auth
+def report():
+    d = request.get_json(force=True)
+    upi = d.get("upi_id", "").strip()
+    if "@" not in upi:
+        return jsonify(error="Enter a valid UPI ID."), 400
+    with db() as c:
+        c.execute("""INSERT INTO reports(user_id,upi_id,category,details,created_at)
+                     VALUES(?,?,?,?,?)""",
+                  (request.user_id, upi, d.get("category", "Other"),
+                   d.get("details", ""), datetime.utcnow().isoformat()))
+        exists = c.execute("SELECT 1 FROM recipients WHERE upi_id=? AND user_id=?",
+                           (upi, request.user_id)).fetchone()
+        if exists:
+            c.execute("""UPDATE recipients SET blacklisted=1
+                         WHERE upi_id=? AND user_id=?""", (upi, request.user_id))
+        else:
+            c.execute("""INSERT INTO recipients(user_id,upi_id,name,blacklisted,first_seen)
+                         VALUES(?,?,?,1,?)""",
+                      (request.user_id, upi, upi.split("@")[0].title(),
+                       datetime.utcnow().isoformat()))
+    push_alert(request.user_id, "Medium", "Fraud report filed",
+               f"{upi} blacklisted after your report ({d.get('category', 'Other')}).")
+    return jsonify(ok=True,
+                   message=f"{upi} has been blacklisted. Future payments to it will be blocked.")
+
+@app.get("/api/reports")
+@auth
+def my_reports():
+    with db() as c:
+        rows = c.execute("""SELECT * FROM reports WHERE user_id=?
+                            ORDER BY id DESC LIMIT 25""", (request.user_id,)).fetchall()
+    return jsonify(reports=[dict(r) for r in rows])
 
 @app.get("/")
 def home():
-    return send_from_directory("static", "index.html")
+    return app.send_static_file("index.html")
 
+init_db()
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True, port=5000)
-
-
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=False, port=port, host="0.0.0.0")

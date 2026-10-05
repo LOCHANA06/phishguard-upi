@@ -2,3 +2,12 @@ phishguard.db
 phishguard_model.pkl
 __pycache__/
 venv/
+phishguard.db.bak
+
+_
+node_modules/
+android/app/build/
+android/.gradle/
+android/build/
+android/local.properties
+.env

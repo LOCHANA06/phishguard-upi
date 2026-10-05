@@ -1,129 +1,363 @@
-const API = "";
-const $ = s => document.querySelector(s);
+const API = "http://192.168.1.10:5000";            //  only inside the APK
+let token = localStorage.getItem("pg_token") || "";
+let scanner = null, payRef = null, balanceVisible = true, repCategory = "Phishing QR code";
 
-// ---------- Navigation ----------
-document.querySelectorAll(".nav-btn, .back").forEach(btn =>
-  btn.addEventListener("click", () => showPage(btn.dataset.page)));
-function showPage(id){
-  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
-  $("#page-" + id).classList.add("active");
-  document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.page === id));
-  if (id === "dashboard") loadDashboard();
-  if (id === "alerts") loadAlerts();
+const $ = id => document.getElementById(id);
+const show = el => el.classList.remove("hidden");
+const hide = el => el.classList.add("hidden");
+
+/* ================= API ================= */
+async function api(path, body, method = "POST") {
+  const res = await fetch(API + path, {
+    method,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !path.startsWith("/api/login") && !path.startsWith("/api/signup")) {
+    doLogout(true);
+    const err = new Error("Session expired — please sign in again."); err.status = 401; throw err;
+  }
+  if (!res.ok) {
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    err.status = res.status; throw err;
+  }
+  return data;
 }
 
-// ---------- Dashboard ----------
-async function loadDashboard(){
-  const d = await (await fetch(API + "/api/dashboard")).json();
-  $("#st-total").textContent = d.stats.total ?? 0;
-  $("#st-high").textContent = d.stats.high ?? 0;
-  $("#st-blocked").textContent = d.stats.blocked ?? 0;
-  $("#st-avg").textContent = (d.stats.avg_risk ?? 0).toFixed(1);
-  const tb = $("#txn-table tbody"); tb.innerHTML = "";
-  d.transactions.forEach(t => tb.appendChild(row(t)));
-}
-function row(t){
-  const tr = document.createElement("tr");
-  tr.innerHTML = `<td>${t.ref}</td><td>${t.merchant_name || t.upi_id || "—"}</td>
-    <td>₹${(+t.amount).toLocaleString("en-IN")}</td><td>${t.source.toUpperCase()}</td>
-    <td><span class="badge b-${t.risk_level.toLowerCase()}">${t.risk_level} · ${t.risk_score}</span></td>
-    <td>${t.status.replace("_"," ")}</td>`;
-  return tr;
+/* ================= STATE CLEARING (per-user isolation) ================= */
+function clearUserState() {
+  ["payUpi", "payName", "payAmt", "payNote", "verCode", "linkInput", "repUpi", "repDetails"]
+    .forEach(id => { const el = $(id); if (el) el.value = ""; });
+  [["payUpi", "payUpiMsg"], ["payAmt", "payAmtMsg"]].forEach(([inp, msg]) => {
+    const i = $(inp), m = $(msg);
+    if (i) i.classList.remove("input-val-error", "input-val-success");
+    if (m) { m.textContent = ""; m.className = "val-msg"; }
+  });
+  ["linkResult", "scanResult", "repMsg"].forEach(id => {
+    const el = $(id); if (el) { el.innerHTML = ""; el.classList.add("hidden"); }
+  });
+  hide($("payStepVerify")); hide($("payStepDone")); hide($("payStepBlocked"));
+  show($("payStepForm"));
 }
 
-// ---------- Alert renderer (shared) ----------
-function alertCard(res){
-  const g = res.risk_level === "High" ? "#e02b4b" : res.risk_level === "Medium" ? "#f59e0b" : "#12b76a";
-  const reasons = res.reasons.map(r => `<li>${r}</li>`).join("");
-  let actions = "";
-  if (res.status === "needs_confirmation")
-    actions = `<div class="row"><button class="btn confirm" onclick="confirmPay('${res.ref}')">✅ Verify & Authorize</button>
-               <button class="btn ghost" onclick="showPage('report')">🚩 Report Instead</button></div>`;
-  if (res.status === "blocked")
-    actions = `<div class="row"><button class="btn danger" onclick="prefillReport('${res.upi_id}')">🚩 Report This Recipient</button>
-               <button class="btn ghost" onclick="showPage('dashboard')">← Back to Dashboard</button></div>`;
-  if (res.status === "allowed")
-    actions = `<div class="row"><button class="btn confirm" onclick="alert('Payment of ₹${res.amount} authorized ✅')">Proceed with Payment</button></div>`;
-  return `<div class="card result-card risk-${res.risk_level.toLowerCase()}">
-    <h2>⚠️ Potential phishing transaction detected</h2>
-    <p class="muted">Risk level: <b style="color:${g}">${res.risk_level} — ${res.risk_score}/100</b></p>
-    <div class="gauge" style="background:conic-gradient(${g} ${res.risk_score*3.6}deg,#e8edf8 0)"><span style="color:${g};background:#fff;border-radius:50%;width:84px;height:84px;display:flex;align-items:center;justify-content:center">${res.risk_score}</span></div>
-    <p><b>${res.merchant || res.upi_id}</b> · ₹${(+res.amount).toLocaleString("en-IN")} · via ${res.source.toUpperCase()}${res.domain ? " · " + res.domain : ""}</p>
-    <p style="margin-top:10px;font-weight:600">This payment was flagged because:</p>
-    <ul class="reason-list">${reasons}</ul>
-    <div class="action-box">${res.recommended_action}</div>
-    ${actions}</div>`;
-}
-async function confirmPay(ref){
-  const r = await (await fetch(API + `/api/confirm/${ref}`, {method:"POST"})).json();
-  $("#result-body").innerHTML = `<div class="card result-card risk-low"><h2>✅ Payment Authorized</h2><p class="muted">${r.message}</p></div>`;
+/* ================= AUTH ================= */
+$("tabLogin").onclick = () => switchTab(true);
+$("tabSignup").onclick = () => switchTab(false);
+function switchTab(login) {
+  $("tabLogin").classList.toggle("active", login);
+  $("tabSignup").classList.toggle("active", !login);
+  if (login) { show($("loginForm")); hide($("signupForm")); }
+  else { show($("signupForm")); hide($("loginForm")); }
 }
 
-// ---------- QR Scan flow: scan -> analyze -> RESULT PAGE ----------
-$("#btn-scan").addEventListener("click", async () => {
-  const frame = $(".qr-frame"); frame.classList.add("scanning");
-  $("#btn-scan").disabled = true; $("#btn-scan").textContent = "Scanning…";
-  const demos = ["upi://pay?pa=quickrewards@ybl&pn=Quick%20Rewards&am=4999",
-                 "upi://pay?pa=swiggy@icici&pn=Swiggy&am=249"];
-  const payload = demos[Math.floor(Math.random()*demos.length)];
-  await new Promise(r => setTimeout(r, 2200));           // simulated camera scan
-  const res = await (await fetch(API + "/api/analyze", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({payload, source:"qr", merchant_name: decodeURIComponent(payload.split("pn=")[1]?.split("&")[0] || "")})
-  })).json();
-  frame.classList.remove("scanning"); $("#btn-scan").disabled = false;
-  $("#btn-scan").textContent = "Start Scan & Detect";
-  $("#result-body").innerHTML = alertCard(res);
-  showPage("result");
-});
+$("loginForm").onsubmit = async e => {
+  e.preventDefault(); $("li_err").textContent = "";
+  try { enterApp(await api("/api/login", { email: $("li_email").value, password: $("li_pw").value })); }
+  catch (err) { $("li_err").textContent = err.message; }
+};
 
-// ---------- Link analysis flow ----------
-async function analyzeLink(url){
-  const res = await (await fetch(API + "/api/analyze", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({url, source:"link", amount: 2499, merchant_name:"Online Store"})
-  })).json();
-  $("#result-body").innerHTML = alertCard(res);
-  showPage("result");
+$("signupForm").onsubmit = async e => {
+  e.preventDefault(); $("su_err").textContent = "";
+  try { enterApp(await api("/api/signup", { name: $("su_name").value, email: $("su_email").value,
+    phone: $("su_phone").value, password: $("su_pw").value })); }
+  catch (err) { $("su_err").textContent = err.message; }
+};
+
+function enterApp(r) {
+  token = r.token;
+  localStorage.setItem("pg_token", token);
+  localStorage.setItem("pg_user", r.user.name || "User");
+  clearUserState();
+  hide($("authScreen")); show($("appScreen"));
+  $("userChip").textContent = r.user.name || "User";
+  loadDashboard().catch(e => console.error(e));
 }
-$("#btn-link").addEventListener("click", () => analyzeLink($("#link-input").value.trim()));
-$("#btn-link-demo").addEventListener("click", () => {
-  $("#link-input").value = "http://192.168.4.22/paytm-kyc/verify?otp=urgent";
-  analyzeLink($("#link-input").value);
-});
 
-// ---------- Transaction flow ----------
-$("#btn-txn").addEventListener("click", async () => {
-  const res = await (await fetch(API + "/api/analyze", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({amount:+$("#t-amount").value, upi_id:$("#t-upi").value,
-      merchant_name:$("#t-name").value, location:$("#t-loc").value, source:"app"})
-  })).json();
-  $("#result-body").innerHTML = alertCard(res);
-  showPage("result");
-});
+function doLogout(expired) {
+  if (!expired && token) api("/api/logout").catch(() => {});
+  token = "";
+  localStorage.removeItem("pg_token");
+  localStorage.removeItem("pg_user");
+  clearUserState();
+  hide($("appScreen")); show($("authScreen"));
+  $("userChip").textContent = "";
+}
+$("logoutBtn").onclick = () => doLogout(false);
 
-// ---------- Alerts page ----------
-async function loadAlerts(){
-  const d = await (await fetch(API + "/api/dashboard")).json();
-  const box = $("#alert-list"); box.innerHTML = d.alerts.length ? "" : `<p class="muted">No alerts yet. All clear ✅</p>`;
-  d.alerts.forEach(a => {
-    const div = document.createElement("div");
-    div.className = "alert-item" + (a.risk_level === "High" ? " high" : "");
-    div.innerHTML = `<b>${a.risk_level} risk · ${a.risk_score}/100</b> — ${a.merchant_name || a.upi_id}
-      (₹${(+a.amount).toLocaleString("en-IN")}, ${a.source})<ul class="reason-list">${JSON.parse(a.reasons).map(r=>`<li>${r}</li>`).join("")}</ul>
-      <span class="badge b-${a.risk_level.toLowerCase()}">${a.status.replace("_"," ")}</span>`;
-    box.appendChild(div);
+if (token) {
+  api("/api/dashboard", null, "GET")
+    .then(d => {
+      show($("appScreen")); hide($("authScreen"));
+      $("userChip").textContent = localStorage.getItem("pg_user") || "User";
+      renderDashboard(d);
+    })
+    .catch(() => { token = ""; localStorage.removeItem("pg_token"); });
+}
+
+/* ================= NAV ================= */
+document.querySelectorAll(".nav-btn, .nav-go").forEach(b => b.onclick = () => goPage(b.dataset.page));
+$("viewAllBtn").onclick = () => goPage("transactions");
+function goPage(page) {
+  document.querySelectorAll(".nav-btn").forEach(x => x.classList.toggle("active", x.dataset.page === page));
+  document.querySelectorAll(".page").forEach(p => p.classList.add("hidden"));
+  show($("page-" + page));
+  if (page === "dashboard") loadDashboard().catch(() => {});
+  if (page === "transactions") loadTransactions().catch(() => {});
+  if (page === "alerts") loadAlerts().catch(() => {});
+  if (page === "report") loadReports().catch(() => {});
+  if (page !== "scan") stopScan();
+}
+
+/* ================= DASHBOARD / BALANCE ================= */
+async function loadDashboard() { renderDashboard(await api("/api/dashboard", null, "GET")); }
+
+function renderDashboard(d) {
+  window._balance = d.stats.balance;
+  $("balAmount").textContent = balanceVisible
+    ? "₹" + Number(d.stats.balance).toLocaleString("en-IN", { minimumFractionDigits: 2 })
+    : "₹ ••••••";
+  $("payBalChip").textContent = "Bal: ₹" +
+    Number(d.stats.balance).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  $("statGrid").innerHTML = `
+    <div class="stat"><span class="n">${d.stats.total}</span><span class="l">Transactions</span></div>
+    <div class="stat ok"><span class="n">${d.stats.completed}</span><span class="l">Completed</span></div>
+    <div class="stat warn"><span class="n">${d.stats.medium}</span><span class="l">Medium Risk</span></div>
+    <div class="stat bad"><span class="n">${d.stats.high}</span><span class="l">Blocked</span></div>
+    <div class="stat"><span class="n">${d.stats.alerts}</span><span class="l">Alerts Sent</span></div>`;
+  $("recentBody").innerHTML = d.transactions.slice(0, 6).map(t => `
+    <tr><td>${new Date(t.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</td>
+    <td><b>${t.name}</b></td><td>₹${Number(t.amount).toLocaleString("en-IN")}</td>
+    <td><span class="pill ${t.level.toLowerCase()}">${t.level} · ${t.risk}</span></td>
+    <td><span class="status s-${t.status.toLowerCase()}">${t.status}</span></td></tr>`).join("");
+}
+$("eyeBtn").onclick = () => {
+  balanceVisible = !balanceVisible;
+  $("balAmount").textContent = balanceVisible
+    ? "₹" + Number(window._balance || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })
+    : "₹ ••••••";
+};
+
+/* ================= TRANSACTIONS PAGE ================= */
+async function loadTransactions() {
+  const d = await api("/api/dashboard", null, "GET");
+  renderTxns(d.transactions);
+}
+function renderTxns(list) {
+  const f = $("txnFilter").value;
+  let rows = list;
+  if (f === "risk:High") rows = list.filter(t => t.level === "High");
+  else if (f === "risk:Medium") rows = list.filter(t => t.level === "Medium");
+  else if (f !== "all") rows = list.filter(t => t.status === f);
+  $("txnBody").innerHTML = rows.map(t => `
+    <tr><td>${new Date(t.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</td>
+    <td><b>${t.name}</b></td><td class="mono">${t.upi_id}</td>
+    <td>₹${Number(t.amount).toLocaleString("en-IN")}</td>
+    <td><span class="pill ${t.level.toLowerCase()}">${t.level} · ${t.risk}</span></td>
+    <td><span class="status s-${t.status.toLowerCase()}">${t.status}</span></td></tr>`).join("")
+    || `<tr><td colspan="6" class="muted" style="text-align:center">No transactions.</td></tr>`;
+}
+$("txnFilter").onchange = () => loadTransactions().catch(() => {});
+
+/* ================= RESULT RENDER ================= */
+function resultHTML(title, r) {
+  const color = r.level === "High" ? "#DC2626" : r.level === "Medium" ? "#F59E0B" : "#16A34A";
+  return `<div class="card"><h3>${title}</h3><div class="result-row">
+    <div class="gauge" style="background:conic-gradient(${color} ${r.risk * 3.6}deg, #E2E8F0 0deg)">
+      <div class="gauge-in"><b>${r.risk}</b><span>/100</span></div></div>
+    <div style="flex:1;min-width:240px">
+      <div class="risk-banner ${r.level.toLowerCase()}">Risk level: ${r.level} — ${r.risk}/100</div>
+      ${r.reasons && r.reasons.length
+        ? `<ul class="reasons">${r.reasons.map(x => `<li>${x}</li>`).join("")}</ul>`
+        : `<div class="risk-banner low">✅ No suspicious signals — recipient, amount and context look normal.</div>`}
+      ${r.level === "High" ? `<p class="rec">Recommended action: verify the recipient before authorizing this payment.</p>` : ""}
+    </div></div></div>`;
+}
+
+/* ================= SCAN QR ================= */
+$("startCam").onclick = () => {
+  scanner = new Html5Qrcode("qrReader");
+  scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onQrDecoded)
+    .then(() => { show($("stopCam")); $("startCam").textContent = "📷 Scanning…"; })
+    .catch(e => {
+      $("scanResult").innerHTML =
+        `<div class="card"><div class="risk-banner high">Camera unavailable here (${e}). Use <b>Analyze QR Photo</b> — or open via localhost / HTTPS.</div></div>`;
+      show($("scanResult"));
+    });
+};
+$("stopCam").onclick = stopScan;
+function stopScan() {
+  if (scanner) { scanner.stop().then(() => scanner.clear()).catch(() => {}); scanner = null; }
+  hide($("stopCam"));
+  $("startCam").textContent = "▶ Start Camera Scan";
+}
+async function onQrDecoded(text) { stopScan(); showQrResult(text); }
+function showQrResult(text) {
+  api("/api/analyze", { type: "qr", value: text }).then(r => {
+    $("scanResult").innerHTML = `<div class="card"><p class="mono">Decoded: ${text}</p></div>` + resultHTML("QR Analysis Result", r);
+    show($("scanResult"));
+    $("scanResult").scrollIntoView({ behavior: "smooth" });
+  }).catch(err => alert(err.message));
+}
+
+$("qrPhoto").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const dataUrl = await new Promise(res => {
+    const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f);
+  });
+  const text = await decodePhotoJsQR(dataUrl);
+  if (text) return showQrResult(text);
+  try {
+    const d = await api("/api/decode", { image: dataUrl });
+    showQrResult(d.value);
+  } catch (err) {
+    $("scanResult").innerHTML =
+      `<div class="card"><div class="risk-banner high">No QR code detected — try a sharper, closer photo.</div></div>`;
+    show($("scanResult"));
+  }
+  e.target.value = "";
+};
+function decodePhotoJsQR(dataUrl) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const max = 1200, scale = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      const d = ctx.getImageData(0, 0, c.width, c.height);
+      const code = jsQR(d.data, c.width, c.height);
+      resolve(code ? code.data : null);
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
   });
 }
 
-// ---------- Report flow ----------
-window.prefillReport = upi => { $("#r-upi").value = upi; showPage("report"); };
-$("#btn-report").addEventListener("click", async () => {
-  const r = await (await fetch(API + "/api/report", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({upi_id:$("#r-upi").value, reason:$("#r-reason").value, details:$("#r-details").value})
-  })).json();
-  $("#report-msg").textContent = r.message;
+/* ================= ANALYZE LINK ================= */
+$("analyzeLinkBtn").onclick = async () => {
+  const v = $("linkInput").value.trim(); if (!v) return;
+  $("analyzeLinkBtn").textContent = "Analyzing…"; $("analyzeLinkBtn").disabled = true;
+  try {
+    const r = await api("/api/analyze", { type: "link", value: v });
+    $("linkResult").innerHTML = resultHTML("Link Analysis Result", r);
+    show($("linkResult"));
+  } catch (err) { alert(err.message); }
+  $("analyzeLinkBtn").textContent = "Analyze"; $("analyzeLinkBtn").disabled = false;
+};
+
+/* ================= PAY ANYONE ================= */
+function setVal(input, msgEl, ok, msg) {
+  input.classList.toggle("input-val-error", !ok);
+  input.classList.toggle("input-val-success", ok);
+  msgEl.textContent = msg;
+  msgEl.className = "val-msg " + (ok ? "ok" : "err");
+}
+$("payUpi").addEventListener("input", e => {
+  const v = e.target.value.trim();
+  if (!v) { e.target.classList.remove("input-val-error", "input-val-success"); $("payUpiMsg").textContent = ""; return; }
+  const ok = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/.test(v);
+  setVal(e.target, $("payUpiMsg"), ok,
+    v.includes("@") ? (v.split("@")[1].length > 1 ? "✓ Valid UPI handle" : "Bank handle looks incomplete") : "Format: name@bank");
+});
+$("payAmt").addEventListener("input", e => {
+  const v = parseFloat(e.target.value);
+  if (!e.target.value) { e.target.classList.remove("input-val-error", "input-val-success"); $("payAmtMsg").textContent = ""; return; }
+  const bal = window._balance || 0;
+  setVal(e.target, $("payAmtMsg"), v > 0 && v <= bal,
+    v > bal ? "Exceeds your balance" : v > 0 ? "✓ Amount OK" : "Enter an amount above ₹0");
 });
 
+$("payBtn").onclick = () => {
+  const upi = $("payUpi").value.trim(), amt = parseFloat($("payAmt").value);
+  if (!/^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/.test(upi)) {
+    setVal($("payUpi"), $("payUpiMsg"), false, "Enter a valid UPI ID (name@bank)"); return;
+  }
+  if (!amt || amt <= 0 || amt > (window._balance || 0)) {
+    setVal($("payAmt"), $("payAmtMsg"), false, "Check the amount — must be within your balance"); return;
+  }
+  const name = $("payName").value.trim() || upi.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  $("sheetName").textContent = name;
+  $("sheetUpi").textContent = upi;
+  $("sheetAmt").textContent = "₹" + amt.toLocaleString("en-IN");
+  $("sheetAvatar").textContent = name[0].toUpperCase();
+  show($("sheetBackdrop"));
+};
+$("sheetCancel").onclick = () => hide($("sheetBackdrop"));
+
+document.querySelectorAll(".pay-app").forEach(b => b.onclick = async () => {
+  hide($("sheetBackdrop")); show($("payProcessing"));
+  $("procText").textContent = `Paying via ${b.dataset.app}…`;
+  await new Promise(r => setTimeout(r, 1600));
+  try {
+    const r = await api("/api/pay", {
+      upi_id: $("payUpi").value.trim(), name: $("payName").value.trim(),
+      amount: parseFloat($("payAmt").value), note: $("payNote").value, app: b.dataset.app
+    });
+    payRef = r.pay_ref;
+    hide($("payProcessing"));
+    if (r.status === "success") return payDone(r);
+    if (r.status === "blocked") {
+      $("blkReasons").innerHTML = (r.reasons || []).map(x => `<li>${x}</li>`).join("")
+        || "<li>High-risk pattern detected.</li>";
+      show($("payStepBlocked")); return;
+    }
+    $("verReasons").innerHTML = (r.reasons || []).map(x => `<li>${x}</li>`).join("");
+    show($("payStepVerify"));
+  } catch (err) { hide($("payProcessing")); alert(err.message); }
+});
+
+$("verSubmit").onclick = async () => {
+  try {
+    await api("/api/pay/confirm", { pay_ref: payRef, code: $("verCode").value,
+      upi_id: $("payUpi").value.trim(), amount: parseFloat($("payAmt").value) });
+    payDone({ amount: $("payAmt").value, upi: $("payUpi").value.trim() });
+  } catch (err) { alert(err.message); }
+};
+
+function payDone(r) {
+  $("doneMeta").textContent = `₹${Number(r.amount).toLocaleString("en-IN")} paid to ${r.upi}`;
+  hide($("payStepVerify"));
+  show($("payStepDone"));
+  loadDashboard().catch(() => {});
+}
+$("doneAgain").onclick = $("blkBack").onclick = () => {
+  hide($("payStepDone")); hide($("payStepBlocked"));
+  clearUserState();
+  show($("payStepForm"));
+};
+
+/* ================= ALERTS ================= */
+async function loadAlerts() {
+  const d = await api("/api/alerts", null, "GET");
+  $("alertList").innerHTML = d.alerts.map(a => `
+    <div class="alert-item ${a.level.toLowerCase()}">
+      <div class="alert-head"><b>${a.title}</b><span class="pill ${a.level.toLowerCase()}">${a.level}</span></div>
+      <p>${a.body}</p>
+      <p class="muted" style="font-size:.78rem">${new Date(a.created_at).toLocaleString("en-IN")}</p>
+    </div>`).join("") || `<p class="muted">No alerts yet.</p>`;
+}
+
+/* ================= REPORT FRAUD ================= */
+document.querySelectorAll("#repCats .chip").forEach(c => c.onclick = () => {
+  document.querySelectorAll("#repCats .chip").forEach(x => x.classList.remove("sel"));
+  c.classList.add("sel");
+  repCategory = c.dataset.cat;
+});
+$("repBtn").onclick = async () => {
+  try {
+    const r = await api("/api/report", { upi_id: $("repUpi").value.trim(),
+      category: repCategory, details: $("repDetails").value });
+    $("repMsg").textContent = "✅ " + r.message; show($("repMsg"));
+    $("repUpi").value = ""; $("repDetails").value = "";
+    loadReports().catch(() => {});
+  } catch (err) { $("repMsg").textContent = err.message; show($("repMsg")); }
+};
+async function loadReports() {
+  const d = await api("/api/reports", null, "GET");
+  $("repHistory").innerHTML = d.reports.map(r => `
+    <div class="rep-item"><b class="mono">${r.upi_id}</b><span class="pill high">${r.category}</span>
+    <p class="muted" style="font-size:.8rem">${r.details || "—"} · ${new Date(r.created_at).toLocaleDateString("en-IN")}</p></div>`).join("")
+    || `<p class="muted">No reports filed yet.</p>`;
+}
