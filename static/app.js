@@ -1,4 +1,4 @@
-const API = "http://192.168.1.10:5000";            //  only inside the APK
+const API = "https://phishguard-upi.onrender.com";            //  only inside the APK
 let token = localStorage.getItem("pg_token") || "";
 let scanner = null, payRef = null, balanceVisible = true, repCategory = "Phishing QR code";
 
@@ -8,7 +8,7 @@ const hide = el => el.classList.add("hidden");
 
 /* ================= API ================= */
 async function api(path, body, method = "POST") {
-  const res = await fetch(API + path, {
+  const res = await fetech(API + path, {
     method,
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
     body: body ? JSON.stringify(body) : undefined
