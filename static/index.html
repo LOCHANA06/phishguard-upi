@@ -4,17 +4,47 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PhishGuard UPI — Real-Time Fraud Protection</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563EB' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/%3E%3Cpolyline points='9 12 11 14 15 10'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
 </head>
 <body>
 
+<!-- ================= ICON SET (stroke, inherits color) ================= -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="3" y1="12" x2="21" y2="12"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+  <symbol id="i-x-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+  <symbol id="i-arrow-in" viewBox="0 0 24 24"><line x1="17" y1="7" x2="7" y2="17"/><polyline points="17 17 7 17 7 7"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+</svg>
+
 <!-- ================= AUTH ================= -->
 <div id="authScreen" class="auth-wrap">
   <div class="auth-card">
     <div class="auth-brand">
-      <div class="logo">🛡️</div>
+      <div class="logo"><svg class="icon"><use href="#i-shield"/></svg></div>
       <h1>PhishGuard <span>UPI</span></h1>
     </div>
     <div class="auth-tabs">
@@ -23,29 +53,48 @@
     </div>
     <form id="loginForm" class="auth-form">
       <label>Email
-        <span class="field-ico"><span class="ico">✉️</span>
+        <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-mail"/></svg></span>
           <input id="li_email" type="email" autocomplete="off" placeholder="you@example.com" required></span></label>
       <label>Password
-        <span class="field-ico"><span class="ico">🔑</span>
+        <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-lock"/></svg></span>
           <input id="li_pw" type="password" placeholder="••••••••" required></span></label>
+      <div class="row-end"><button type="button" id="forgotBtn" class="link-btn">Forgot password?</button></div>
       <button class="btn primary big" type="submit">Sign In</button>
       <p id="li_err" class="form-err"></p>
+      <p id="li_ok" class="form-ok"></p>
     </form>
     <form id="signupForm" class="auth-form hidden">
       <label>Full name
-        <span class="field-ico"><span class="ico">👤</span>
+        <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-user"/></svg></span>
           <input id="su_name" autocomplete="off" placeholder="e.g. Lochana B" required></span></label>
       <label>Email
-        <span class="field-ico"><span class="ico">✉️</span>
+        <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-mail"/></svg></span>
           <input id="su_email" type="email" autocomplete="off" placeholder="you@example.com" required></span></label>
       <label>Phone (for SMS alerts)
-        <span class="field-ico"><span class="ico">📱</span>
+        <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-phone"/></svg></span>
           <input id="su_phone" autocomplete="off" placeholder="+91XXXXXXXXXX" required></span></label>
       <label>Password
-        <span class="field-ico"><span class="ico">🔑</span>
+        <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-lock"/></svg></span>
           <input id="su_pw" type="password" placeholder="min 6 characters" required></span></label>
       <button class="btn primary big" type="submit">Create Account</button>
       <p id="su_err" class="form-err"></p>
+    </form>
+    <form id="forgotForm" class="auth-form hidden">
+      <label>Email
+        <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-mail"/></svg></span>
+          <input id="fi_email" type="email" autocomplete="off" placeholder="you@example.com"></span></label>
+      <button id="sendCodeBtn" class="btn primary big" type="button">Send reset code</button>
+      <div id="resetStep2" class="hidden">
+        <label>Reset code
+          <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-lock"/></svg></span>
+            <input id="fi_code" autocomplete="one-time-code" maxlength="6" inputmode="numeric" placeholder="6-digit code"></span></label>
+        <label>New password
+          <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-key"/></svg></span>
+            <input id="fi_pw" type="password" placeholder="min 6 characters"></span></label>
+        <button class="btn primary big" type="submit">Reset password</button>
+      </div>
+      <p id="fi_msg" class="form-err"></p>
+      <div class="center-btn"><button type="button" id="backLoginBtn" class="link-btn">Back to sign in</button></div>
     </form>
   </div>
 </div>
@@ -53,21 +102,22 @@
 <!-- ================= APP ================= -->
 <div id="appScreen" class="app hidden">
   <header class="topbar">
-    <div class="brand">🛡️ PhishGuard <span>UPI</span></div>
+    <div class="brand"><svg class="icon"><use href="#i-shield"/></svg> PhishGuard <span>UPI</span></div>
     <div class="user-chip" id="userChip"></div>
   </header>
   <div class="shell">
     <aside class="sidebar">
       <nav>
-        <button class="nav-btn active" data-page="dashboard">🏠 Dashboard</button>
-        <button class="nav-btn" data-page="transactions">💳 Transactions</button>
-        <button class="nav-btn" data-page="scan">📷 Scan QR</button>
-        <button class="nav-btn" data-page="link">🔗 Analyze Link</button>
-        <button class="nav-btn" data-page="pay">💸 Pay Anyone</button>
-        <button class="nav-btn" data-page="alerts">🔔 Alerts</button>
-        <button class="nav-btn" data-page="report">🚩 Report Fraud</button>
+        <button class="nav-btn active" data-page="dashboard"><svg class="icon"><use href="#i-grid"/></svg>Dashboard</button>
+        <button class="nav-btn" data-page="transactions"><svg class="icon"><use href="#i-card"/></svg>Transactions</button>
+        <button class="nav-btn" data-page="scan"><svg class="icon"><use href="#i-scan"/></svg>Scan QR</button>
+        <button class="nav-btn" data-page="link"><svg class="icon"><use href="#i-link"/></svg>Analyze Link</button>
+        <button class="nav-btn" data-page="pay"><svg class="icon"><use href="#i-send"/></svg>Pay Anyone</button>
+        <button class="nav-btn" data-page="alerts"><svg class="icon"><use href="#i-bell"/></svg>Alerts</button>
+        <button class="nav-btn" data-page="report"><svg class="icon"><use href="#i-flag"/></svg>Report Fraud</button>
+        <button class="nav-btn" data-page="settings"><svg class="icon"><use href="#i-settings"/></svg>Settings</button>
       </nav>
-      <button id="logoutBtn" class="logout-btn">⏻ Log Out</button>
+      <button id="logoutBtn" class="logout-btn"><svg class="icon"><use href="#i-power"/></svg>Log Out</button>
     </aside>
     <main class="content">
 
@@ -78,27 +128,27 @@
             <div class="balance-label">Available Balance</div>
             <div class="balance-row">
               <span class="balance-amt" id="balAmount">₹ ••••••</span>
-              <button class="eye-btn" id="eyeBtn">👁</button>
+              <button class="eye-btn" id="eyeBtn" aria-label="Toggle balance visibility"><svg class="icon"><use href="#i-eye"/></svg></button>
             </div>
-            <div class="balance-sub">PhishGuard Demo Bank •••• 4821</div>
+            <div class="balance-sub" id="balSub">PhishGuard Demo Bank •••• 4821</div>
           </div>
-          <span class="balance-badge">🛡️ Fraud Protection Active</span>
+          <span class="balance-badge"><svg class="icon"><use href="#i-shield"/></svg>Fraud Protection Active</span>
         </div>
         <div class="tile-grid">
-          <button class="tile pay nav-go" data-page="pay"><span class="ico">💸</span>Pay Anyone</button>
-          <button class="tile scan nav-go" data-page="scan"><span class="ico">📷</span>Scan QR</button>
-          <button class="tile link nav-go" data-page="link"><span class="ico">🔗</span>Analyze Link</button>
-          <button class="tile report nav-go" data-page="report"><span class="ico">🚩</span>Report Fraud</button>
+          <button class="tile pay nav-go" data-page="pay"><span class="ico"><svg class="icon"><use href="#i-send"/></svg></span>Pay Anyone</button>
+          <button class="tile scan nav-go" data-page="scan"><span class="ico"><svg class="icon"><use href="#i-scan"/></svg></span>Scan QR</button>
+          <button class="tile link nav-go" data-page="link"><span class="ico"><svg class="icon"><use href="#i-link"/></svg></span>Analyze Link</button>
+          <button class="tile report nav-go" data-page="report"><span class="ico"><svg class="icon"><use href="#i-flag"/></svg></span>Report Fraud</button>
         </div>
         <div class="stat-grid" id="statGrid"></div>
         <div class="card">
-          <h3>Recent Transactions <span class="live-dot">● LIVE</span></h3>
+          <h3>Recent Transactions <span class="live-dot">LIVE</span></h3>
           <div class="table-wrap"><table>
-            <thead><tr><th>Date</th><th>Recipient</th><th>Amount</th><th>Risk</th><th>Status</th></tr></thead>
+            <thead><tr><th>Date</th><th>Party</th><th>Amount</th><th>Risk</th><th>Status</th></tr></thead>
             <tbody id="recentBody"></tbody>
           </table></div>
           <br>
-          <button class="btn ghost" id="viewAllBtn">View All Transactions →</button>
+          <button class="btn ghost" id="viewAllBtn">View All Transactions</button>
         </div>
       </section>
 
@@ -112,13 +162,13 @@
               <option value="Completed">Completed</option>
               <option value="Pending">Pending</option>
               <option value="Blocked">Blocked</option>
-              <option value="risk:High">⚠️ High Risk</option>
+              <option value="risk:High">High Risk</option>
               <option value="risk:Medium">Medium Risk</option>
 
             </select>
           </div>
           <div class="table-wrap"><table>
-            <thead><tr><th>Date</th><th>Recipient</th><th>UPI ID</th><th>Amount</th><th>Risk</th><th>Status</th></tr></thead>
+            <thead><tr><th>Date</th><th>Party</th><th>UPI ID</th><th>Amount</th><th>Risk</th><th>Status</th></tr></thead>
             <tbody id="txnBody"></tbody>
           </table></div>
         </div>
@@ -130,9 +180,9 @@
         <div class="card">
           <div id="qrReader" class="qr-reader"></div>
           <div class="row" style="justify-content:center">
-            <button id="startCam" class="btn primary">▶ Start Camera Scan</button>
-            <button id="stopCam" class="btn ghost hidden">■ Stop</button>
-            <label class="btn ghost file-btn">📷 Analyze QR Photo
+            <button id="startCam" class="btn primary">Start Camera Scan</button>
+            <button id="stopCam" class="btn ghost hidden">Stop</button>
+            <label class="btn ghost file-btn"><svg class="icon"><use href="#i-image"/></svg>Analyze QR Photo
               <input id="qrPhoto" type="file" accept="image/*" hidden></label>
           </div>
         </div>
@@ -157,17 +207,21 @@
         <h2 class="page-title">Pay Anyone</h2>
         <div id="payStepForm" class="card pay-card">
           <div class="pay-hero">
-            <div class="pay-avatar">⊕</div>
+            <div class="pay-avatar"><svg class="icon"><use href="#i-send"/></svg></div>
             <div><b>New Payment</b><br>
               <span style="opacity:.75;font-size:.78rem">UPI transfer • instant • protected</span></div>
             <span class="balance-badge" style="margin-left:auto" id="payBalChip">Bal: ₹ —</span>
           </div>
+          <div id="dirWrap" class="hidden">
+            <div class="muted" style="font-size:.78rem;margin:2px 0 6px">Registered PhishGuard users — tap to pay (demo)</div>
+            <div class="chip-row" id="dirList"></div>
+          </div>
           <label class="fld">Recipient UPI ID
-            <span class="field-ico"><span class="ico">👤</span>
+            <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-user"/></svg></span>
               <input id="payUpi" autocomplete="off" spellcheck="false" placeholder="name@bank"></span>
             <div class="val-msg" id="payUpiMsg"></div></label>
           <label class="fld">Recipient name
-            <span class="field-ico"><span class="ico">🏷️</span>
+            <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-tag"/></svg></span>
               <input id="payName" autocomplete="off" placeholder="e.g. Sri Traders"></span></label>
           <label class="fld">Amount
             <span class="field-ico"><span class="ico">₹</span>
@@ -176,12 +230,12 @@
           <label class="fld">Note
             <textarea id="payNote" rows="3" autocomplete="off"
               placeholder="Add a message for the recipient (optional)"></textarea></label>
-          <button id="payBtn" class="btn primary big">Proceed to Pay →</button>
-          <div class="secure-note">🔒 Verified by PhishGuard real-time fraud engine</div>
+          <button id="payBtn" class="btn primary big">Proceed to Pay</button>
+          <div class="secure-note"><svg class="icon"><use href="#i-lock"/></svg>Verified by PhishGuard real-time fraud engine</div>
         </div>
 
         <div id="payStepVerify" class="card pay-card hidden">
-          <h3>🔐 Extra Verification Required</h3>
+          <h3><svg class="icon"><use href="#i-lock"/></svg>Extra Verification Required</h3>
           <div class="risk-banner high">This payment was flagged. Confirm it's really you.</div>
           <ul id="verReasons" class="reasons"></ul>
           <input id="verCode" class="text-input center" maxlength="6"
@@ -190,18 +244,18 @@
         </div>
 
         <div id="payStepDone" class="card pay-card hidden">
-          <div class="success-ring">✔</div>
+          <div class="success-ring"><svg class="icon"><use href="#i-check"/></svg></div>
           <h3 style="text-align:center">Payment Successful</h3>
           <p class="muted" style="text-align:center" id="doneMeta"></p>
           <button id="doneAgain" class="btn ghost big">Make another payment</button>
         </div>
 
         <div id="payStepBlocked" class="card pay-card hidden">
-          <div class="blocked-ring">⛔</div>
+          <div class="blocked-ring"><svg class="icon"><use href="#i-x-circle"/></svg></div>
           <h3 style="text-align:center">Payment Blocked</h3>
           <div class="risk-banner high">High risk — authorization paused for your safety.</div>
           <ul id="blkReasons" class="reasons"></ul>
-          <button id="blkBack" class="btn ghost big">← Back</button>
+          <button id="blkBack" class="btn ghost big">Back</button>
         </div>
       </section>
 
@@ -224,17 +278,44 @@
             <button class="chip" data-cat="Other">Other</button>
           </div>
           <label class="fld">UPI ID to report
-            <span class="field-ico"><span class="ico">⚠️</span>
+            <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-alert"/></svg></span>
               <input id="repUpi" autocomplete="off" placeholder="fraudster@upi"></span></label>
           <label class="fld">What happened?
             <textarea id="repDetails" rows="4" autocomplete="off"
               placeholder="Describe the incident — what was promised, what actually happened, and the amount involved…"></textarea></label>
-          <button id="repBtn" class="btn primary">🚩 Submit Report</button>
+          <button id="repBtn" class="btn primary"><svg class="icon"><use href="#i-flag"/></svg>Submit Report</button>
           <p id="repMsg" class="form-ok hidden"></p>
         </div>
         <div class="card">
           <h3>Your Previous Reports</h3>
           <div id="repHistory"></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="page-settings" class="page hidden">
+        <h2 class="page-title">Account Settings</h2>
+        <div class="card">
+          <h3>Profile</h3>
+          <div class="kv" id="profKv"></div>
+          <label class="fld">Your real UPI ID (receive real money)
+            <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-send"/></svg></span>
+              <input id="realUpiInput" autocomplete="off" spellcheck="false" placeholder="yourname@okaxis"></span>
+            <div class="val-msg" id="realUpiMsg"></div></label>
+          <p class="muted" style="font-size:.82rem;margin-bottom:10px">Friends paying you with <b>UPI App (real money)</b> will transfer straight to this bank-linked VPA. Leave empty to receive demo transfers only.</p>
+          <button id="saveRealUpi" class="btn ghost">Save UPI ID</button>
+        </div>
+        <div class="card danger">
+          <h3><svg class="icon"><use href="#i-trash"/></svg>Delete Account</h3>
+          <p class="muted" style="font-size:.88rem">Permanently erases your profile, balance, transaction history, alerts, reports and every active session. This cannot be undone.</p>
+          <label class="fld">Password
+            <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-lock"/></svg></span>
+              <input id="delPw" type="password" placeholder="Confirm with your password"></span></label>
+          <label class="fld">Type DELETE to confirm
+            <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-alert"/></svg></span>
+              <input id="delConfirm" autocomplete="off" placeholder="DELETE"></span></label>
+          <button id="delBtn" class="btn danger-btn"><svg class="icon"><use href="#i-trash"/></svg>Delete my account permanently</button>
+          <p id="delMsg" class="form-err"></p>
         </div>
       </section>
 
@@ -247,7 +328,7 @@
   <div class="sheet">
     <div class="sheet-head">
       <b>Choose payment method</b>
-      <button class="sheet-close" id="sheetCancel">✕</button>
+      <button class="sheet-close" id="sheetCancel" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
     </div>
     <div class="sheet-payee">
       <div class="pay-avatar" id="sheetAvatar">S</div>
@@ -255,6 +336,8 @@
         <span class="muted mono" id="sheetUpi">—</span></div>
       <div class="sheet-amt" id="sheetAmt">₹0</div>
     </div>
+    <button class="pay-app real" id="payRealBtn"><span class="app-ico" style="background:#16A34A">₹</span>UPI App — real money<span class="upi-tag">REAL</span></button>
+    <p class="muted" style="font-size:.74rem;margin:-2px 0 14px">Opens Google Pay / Phone Pe / Paytm with the amount pre-filled — your UPI PIN authorizes it. PhishGuard never touches your bank.</p>
     <button class="pay-app" data-app="Google Pay"><span class="app-ico" style="background:#1a73e8">G</span>Google Pay<span class="upi-tag">UPI</span></button>
     <button class="pay-app" data-app="PhonePe"><span class="app-ico" style="background:#5f259f">P</span>PhonePe<span class="upi-tag">UPI</span></button>
     <button class="pay-app" data-app="Paytm"><span class="app-ico" style="background:#00b9f1">₹</span>Paytm<span class="upi-tag">UPI</span></button>
@@ -273,6 +356,23 @@
       <div class="spinner"></div>
       <b id="procText">Processing payment…</b>
     </div>
+  </div>
+</div>
+
+<!-- ================= REAL-MONEY UTR CONFIRM SHEET ================= -->
+<div id="utrBackdrop" class="sheet-backdrop hidden">
+  <div class="sheet">
+    <div class="sheet-head">
+      <b>Confirm real-money payment</b>
+      <button class="sheet-close" id="utrCancel" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="risk-banner low">Approve the payment in your UPI app, then enter the UTR below to settle it here.</div>
+    <p class="muted" style="font-size:.85rem;margin-bottom:4px" id="utrMeta">—</p>
+    <label class="fld">12-digit UTR from your UPI app
+      <span class="field-ico"><span class="ico"><svg class="icon"><use href="#i-check"/></svg></span>
+        <input id="utrInput" autocomplete="off" inputmode="numeric" maxlength="12" placeholder="e.g. 427189356012"></span></label>
+    <button id="utrSubmit" class="btn primary big">Mark as paid &amp; settle</button>
+    <p id="utrMsg" class="form-err"></p>
   </div>
 </div>
 

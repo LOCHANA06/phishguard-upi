@@ -15,7 +15,11 @@ body { background:var(--bg); color:var(--text); }
 .auth-card { background:var(--card); border-radius:20px; padding:40px; width:100%;
   max-width:420px; box-shadow:0 24px 60px rgba(11,31,58,.4); }
 .auth-brand { text-align:center; margin-bottom:24px; }
-.auth-brand .logo { font-size:2.4rem; }
+.auth-brand .logo { width:58px; height:58px; margin:0 auto 14px; border-radius:16px;
+  background:linear-gradient(135deg,var(--brand),#60a5fa); color:#fff;
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 10px 24px rgba(37,99,235,.35); }
+.auth-brand .logo .icon { width:30px; height:30px; }
 .auth-brand h1 { color:var(--text); } .auth-brand h1 span { color:var(--brand); }
 .auth-tabs { display:flex; background:var(--bg); border-radius:12px; padding:4px; margin-bottom:20px; }
 .auth-tabs button { flex:1; border:0; padding:10px; border-radius:9px; background:transparent;
@@ -47,7 +51,8 @@ textarea { resize:vertical; min-height:104px; line-height:1.55; }
 /* field with leading icon */
 .field-ico { position:relative; }
 .field-ico .ico { position:absolute; left:14px; top:50%; transform:translateY(-50%);
-  font-size:1rem; pointer-events:none; }
+  color:#94a3b8; pointer-events:none; display:flex; }
+.field-ico .ico .icon { width:17px; height:17px; }
 .field-ico input, .field-ico textarea { padding-left:42px; }
 /* inputs inside dark hero cards */
 .on-dark { display:block; width:100%; padding:13px 16px; background:rgba(255,255,255,.08);
@@ -97,7 +102,9 @@ textarea { resize:vertical; min-height:104px; line-height:1.55; }
 .card { background:var(--card); border:1px solid var(--border); border-radius:16px;
   padding:24px; margin-bottom:20px; box-shadow:0 1px 4px rgba(15,23,42,.05); }
 .card h3 { margin-bottom:14px; }
-.live-dot { color:var(--green); font-size:.68rem; animation:pulse 1.5s infinite; margin-left:8px; }
+.live-dot { background:#ecfdf5; color:var(--green); font-size:.66rem; font-weight:800;
+  letter-spacing:.06em; padding:3px 9px; border-radius:99px; margin-left:8px;
+  animation:pulse 1.5s infinite; }
 @keyframes pulse { 50% { opacity:.3; } }
 
 /* ================= BALANCE HERO ================= */
@@ -122,7 +129,8 @@ textarea { resize:vertical; min-height:104px; line-height:1.55; }
   font-weight:600; color:var(--text); }
 .tile:hover { border-color:var(--brand); transform:translateY(-2px);
   box-shadow:0 8px 22px rgba(37,99,235,.15); }
-.tile .ico { font-size:1.5rem; display:block; margin-bottom:10px; }
+.tile .ico { display:block; margin-bottom:10px; }
+.tile .ico .icon { width:26px; height:26px; }
 .tile.pay .ico { color:var(--brand); } .tile.scan .ico { color:var(--teal); }
 .tile.link .ico { color:var(--amber); } .tile.report .ico { color:var(--red); }
 
@@ -210,8 +218,9 @@ tr:hover td { background:#f1f5fb; }
 @keyframes spin { to { transform:rotate(360deg); } }
 .center { text-align:center; letter-spacing:.4em; font-size:1.15rem !important; margin:14px 0; }
 .success-ring, .blocked-ring { width:84px; height:84px; border-radius:50%; margin:8px auto 16px;
-  display:flex; align-items:center; justify-content:center; font-size:2.2rem; color:#fff;
+  display:flex; align-items:center; justify-content:center; color:#fff;
   animation:pop .4s ease; }
+.success-ring .icon, .blocked-ring .icon { width:40px; height:40px; stroke-width:2.4; }
 .success-ring { background:var(--green); } .blocked-ring { background:var(--red); }
 @keyframes pop { from { transform:scale(.3); opacity:0; } }
 
@@ -237,3 +246,56 @@ tr:hover td { background:#f1f5fb; }
   .sidebar { width:100%; min-height:auto; flex-direction:row; flex-wrap:wrap; align-items:center; }
   .sidebar nav { flex-direction:row; flex-wrap:wrap; }
   .content { padding:16px; } }
+
+/* ================= ICON SYSTEM (stroke SVG, replaces emoji) ================= */
+.icon { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2;
+  stroke-linecap:round; stroke-linejoin:round; display:inline-block; vertical-align:-3px;
+  flex-shrink:0; }
+.topbar .brand .icon { width:20px; height:20px; color:#7ea6ff; vertical-align:-4px; }
+.nav-btn { display:flex; align-items:center; gap:2px; }
+.nav-btn .icon { width:17px; height:17px; margin-right:9px; color:var(--muted); transition:color .15s; }
+.nav-btn:hover .icon { color:var(--brand); }
+.nav-btn.active .icon { color:#fff; }
+.logout-btn .icon { width:15px; height:15px; margin-right:7px; vertical-align:-3px; }
+.eye-btn { display:flex; align-items:center; justify-content:center; }
+.eye-btn .icon { width:17px; height:17px; }
+.balance-badge .icon { width:14px; height:14px; margin-right:6px; vertical-align:-2px; }
+.secure-note .icon { width:15px; height:15px; margin-right:6px; vertical-align:-3px; }
+.pay-card h3 .icon { width:18px; height:18px; margin-right:7px; vertical-align:-4px; color:var(--amber); }
+.pay-avatar { display:flex; align-items:center; justify-content:center; }
+.pay-avatar .icon { width:20px; height:20px; }
+.file-btn .icon { margin-right:7px; vertical-align:-3px; }
+.sheet-close { display:flex; align-items:center; justify-content:center; }
+.sheet-close .icon { width:15px; height:15px; }
+.repBtn, #repBtn .icon { vertical-align:-3px; }
+#repBtn .icon { margin-right:7px; }
+.risk-banner .icon { width:17px; height:17px; margin-right:7px; vertical-align:-4px; }
+.party-in { display:inline-flex; align-items:center; gap:5px; }
+.party-in .icon { width:14px; height:14px; color:var(--green); }
+
+/* ================= LINKS / SMALL HELPERS ================= */
+.link-btn { border:0; background:none; color:var(--brand); font-weight:600; font-size:.85rem;
+  cursor:pointer; padding:4px 0; }
+.link-btn:hover { text-decoration:underline; }
+.row-end { display:flex; justify-content:flex-end; margin-top:-4px; }
+.center-btn { text-align:center; margin-top:12px; }
+.auth-form .form-ok { font-size:.85rem; }
+
+/* ================= SETTINGS / DANGER ZONE ================= */
+.kv { border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:10px; }
+.kv-row { display:flex; justify-content:space-between; gap:12px; padding:11px 14px;
+  border-bottom:1px solid var(--border); font-size:.9rem; }
+.kv-row:last-child { border-bottom:0; }
+.kv-row span { color:var(--muted); }
+.card.danger { border-color:#fecaca; }
+.card.danger h3 { color:var(--red); display:flex; align-items:center; gap:8px; }
+.card.danger h3 .icon { width:18px; height:18px; }
+.btn.danger-btn { background:var(--red); color:#fff; box-shadow:0 4px 16px rgba(220,38,38,.3); }
+.btn.danger-btn:hover { background:#b91c1c; transform:translateY(-1px);
+  box-shadow:0 6px 20px rgba(220,38,38,.4); }
+.btn.danger-btn .icon { margin-right:7px; vertical-align:-3px; }
+
+/* ================= REAL-MONEY PAY OPTION ================= */
+.pay-app.real { border-color:#bbf7d0; background:#f0fdf4; }
+.pay-app.real:hover { border-color:var(--green); background:#ecfdf5; }
+.pay-app.real .upi-tag { color:var(--green); border-color:rgba(22,163,74,.4); font-weight:800; }

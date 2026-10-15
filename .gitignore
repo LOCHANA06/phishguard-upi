@@ -11,3 +11,8 @@ android/.gradle/
 android/build/
 android/local.properties
 .env
+
+# sandbox / local artifacts
+.pylibs/
+.venv/
+*.log

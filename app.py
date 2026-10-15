@@ -1,9 +1,10 @@
-import os, sqlite3, json, pickle, random, string, socket, base64
+import os, sqlite3, json, pickle, random, string, socket, base64, re
 from datetime import datetime, timedelta
 from functools import wraps
 import numpy as np
 import requests as rq
 import cv2
+from urllib.parse import quote
 from flask import Flask, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -47,7 +48,7 @@ def init_db():
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users(
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT UNIQUE,
-            phone TEXT, pw_hash TEXT, created_at TEXT);
+            phone TEXT, pw_hash TEXT, upi_id TEXT, created_at TEXT);
         CREATE TABLE IF NOT EXISTS tokens(
             token TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT);
         CREATE TABLE IF NOT EXISTS recipients(
@@ -67,12 +68,42 @@ def init_db():
         CREATE TABLE IF NOT EXISTS otps(
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, pay_ref TEXT,
             code TEXT, expires_at TEXT, used INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS resets(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
+            code TEXT, expires_at TEXT, used INTEGER DEFAULT 0);
         """)
 
-        # add balance column to existing users table if missing
+        # add columns missing from older schemas (self-heal)
         ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
         if "balance" not in ucols:
             c.execute(f"ALTER TABLE users ADD COLUMN balance REAL DEFAULT {START_BALANCE}")
+        if "upi_id" not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN upi_id TEXT")
+        if "real_upi" not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN real_upi TEXT")
+        tcols = {r["name"] for r in c.execute("PRAGMA table_info(transactions)")}
+        if "direction" not in tcols:
+            c.execute("ALTER TABLE transactions ADD COLUMN direction TEXT DEFAULT 'debit'")
+        if "pay_ref" not in tcols:
+            c.execute("ALTER TABLE transactions ADD COLUMN pay_ref TEXT")
+        if "utr" not in tcols:
+            c.execute("ALTER TABLE transactions ADD COLUMN utr TEXT")
+
+        # every account needs a UPI handle — backfill legacy rows
+        taken = {r["upi_id"] for r in c.execute("SELECT upi_id FROM users WHERE upi_id IS NOT NULL")}
+        for r in c.execute("SELECT id, name FROM users WHERE upi_id IS NULL OR upi_id=''"):
+            h = make_upi_handle(r["name"], taken)
+            taken.add(h)
+            c.execute("UPDATE users SET upi_id=? WHERE id=?", (h, r["id"]))
+
+
+def make_upi_handle(name, taken):
+    """Generate a realistic unique UPI handle, e.g. lochana4821@okphish."""
+    base = re.sub(r"[^a-z0-9]", "", (name or "user").lower())[:10] or "user"
+    while True:
+        h = f"{base}{random.randint(1000, 9999)}@okphish"
+        if h not in taken:
+            return h
 
 # ---------------- auth helper ----------------
 def auth(f):
@@ -222,18 +253,32 @@ def analyze_payload(uid, data):
         blacklisted = bool(rec and rec["blacklisted"])
         txn_count = rec["txn_count"] if rec else 0
         first_seen = rec["first_seen"] if rec else None
+        reg = (c.execute("SELECT name FROM users WHERE upi_id=?", (upi,)).fetchone()
+               if upi else None)
+        hist = (c.execute("""SELECT COUNT(*) n, MIN(created_at) first_at FROM transactions
+                             WHERE user_id=? AND upi_id=? AND status='Completed'""",
+                         (uid, upi)).fetchone()
+                if upi else {"n": 0, "first_at": None})
         avg = (c.execute("SELECT AVG(amount) a FROM transactions WHERE user_id=?",
                          (uid,)).fetchone()["a"]) or 300
+    registered = reg is not None
+    paid_before = hist["n"]
+    if not first_seen:
+        first_seen = hist["first_at"]
+    history = paid_before + txn_count
 
     if blacklisted:
         reasons.append("Recipient was reported earlier and is blacklisted.")
         score += 55
-    if upi and not known:
-        reasons.append(f"Unfamiliar recipient handle ({upi}) — no prior transaction history.")
-        score += 22
-    if upi and known and not verified and txn_count < 2:
-        reasons.append("Recipient has limited transaction history with you.")
-        score += 12
+    if upi and registered:
+        score -= 6          # peer PhishGuard account — KYC'd, familiar network
+    elif upi and not verified:
+        if history == 0:
+            reasons.append(f"Unfamiliar recipient handle ({upi}) — no prior transaction history.")
+            score += 22
+        elif history < 2:
+            reasons.append("Recipient has limited transaction history with you.")
+            score += 12
     if amount > max(avg * 3, 1000):
         reasons.append(f"Amount ₹{amount:,.0f} is far above your normal pattern (~₹{avg:,.0f}).")
         score += 18
@@ -276,10 +321,12 @@ def analyze_payload(uid, data):
 
     if model is not None and amount > 0:
         try:
-            feats = np.array([[np.log1p(amount), 1 if 0 <= h < 6 else 0, txn_count / 10,
+            feats = np.array([[np.log1p(amount), 1 if 0 <= h < 6 else 0,
+                               min(history, 10) / 10,
                                30 if not first_seen else
                                (datetime.utcnow() - datetime.fromisoformat(first_seen)).days,
-                               0, 0, 0.1, 1 if verified else 0, 1 if blacklisted else 0,
+                               0, 0, 0.1, 1 if (verified or registered) else 0,
+                               1 if blacklisted else 0,
                                0, 0.8 if domain in TRUSTED else 0.2,
                                0, 0, 1 if any(wd in low for wd in PHISH_WORDS) else 0,
                                1 if amount > avg * 3 else 0]])
@@ -292,7 +339,8 @@ def analyze_payload(uid, data):
     level = "Low" if score < 35 else ("Medium" if score < 70 else "High")
     if level == "High" and not reasons:
         reasons.append("ML model flags this pattern as matching known phishing behaviour.")
-    return {"risk": score, "level": level, "reasons": reasons, "upi": upi, "domain": domain}
+    return {"risk": score, "level": level, "reasons": reasons, "upi": upi,
+            "domain": domain, "registered": registered}
 
 # ---------------- auth routes ----------------
 @app.post("/api/signup")
@@ -309,10 +357,13 @@ def signup():
     with db() as c:
         if c.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
             return jsonify(error="Email already registered — please sign in."), 400
-        cur = c.execute("""INSERT INTO users(name,email,phone,pw_hash,balance,created_at)
-                           VALUES(?,?,?,?,?,?)""",
+        taken = {r["upi_id"] for r in
+                 c.execute("SELECT upi_id FROM users WHERE upi_id IS NOT NULL")}
+        upi_id = make_upi_handle(name, taken)
+        cur = c.execute("""INSERT INTO users(name,email,phone,pw_hash,balance,upi_id,created_at)
+                           VALUES(?,?,?,?,?,?,?)""",
                         (name, email, phone, generate_password_hash(pw),
-                         START_BALANCE, datetime.utcnow().isoformat()))
+                         START_BALANCE, upi_id, datetime.utcnow().isoformat()))
         uid = cur.lastrowid
     seed_transactions(uid)
     push_alert(uid, "Low", "Welcome to PhishGuard",
@@ -338,6 +389,86 @@ def auth_response(uid, name):
     return jsonify(token=tok, user={"id": uid, "name": name})
 
 
+# ---------------- password reset ----------------
+@app.post("/api/forgot")
+def forgot():
+    d = request.get_json(force=True)
+    email = d.get("email", "").strip().lower()
+    out = {"ok": True,
+           "message": "If that email is registered, a 6-digit reset code has been sent."}
+    with db() as c:
+        u = c.execute("SELECT id, name FROM users WHERE email=?", (email,)).fetchone()
+    if not u:
+        return jsonify(out)   # never reveal whether the email exists
+    code = "".join(random.choices(string.digits, k=6))
+    with db() as c:
+        c.execute("INSERT INTO resets(user_id,code,expires_at) VALUES(?,?,?)",
+                  (u["id"], code,
+                   (datetime.utcnow() + timedelta(minutes=10)).isoformat()))
+    send_email(email, "PhishGuard — password reset code",
+               f"Hi {u['name']}, your password reset code is {code}. "
+               "It is valid for 10 minutes. If you did not request this, ignore this email.")
+    if not RESEND_API_KEY:
+        out["dev_code"] = code   # demo fallback when no email provider is configured
+    return jsonify(out)
+
+@app.post("/api/reset")
+def reset():
+    d = request.get_json(force=True)
+    email = d.get("email", "").strip().lower()
+    code = d.get("code", "").strip()
+    pw = d.get("password", "")
+    if len(pw) < 6:
+        return jsonify(error="New password must be at least 6 characters."), 400
+    with db() as c:
+        u = c.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+        r = (c.execute("""SELECT * FROM resets WHERE user_id=? AND used=0
+                          ORDER BY id DESC""", (u["id"],)).fetchone() if u else None)
+        if not r or r["code"] != code:
+            return jsonify(error="Invalid reset code."), 400
+        if datetime.fromisoformat(r["expires_at"]) < datetime.utcnow():
+            return jsonify(error="Reset code expired — request a new one."), 400
+        c.execute("UPDATE resets SET used=1 WHERE id=?", (r["id"],))
+        c.execute("UPDATE users SET pw_hash=? WHERE id=?",
+                  (generate_password_hash(pw), u["id"]))
+        c.execute("DELETE FROM tokens WHERE user_id=?", (u["id"],))  # end every session
+    push_alert(u["id"], "Medium", "Password changed",
+               "Your PhishGuard password was reset and all sessions were signed out.")
+    return jsonify(ok=True, message="Password updated — sign in with your new password.")
+
+# ---------------- account management ----------------
+@app.post("/api/account/delete")
+@auth
+def delete_account():
+    d = request.get_json(force=True)
+    uid = request.user_id
+    with db() as c:
+        u = c.execute("SELECT upi_id, pw_hash FROM users WHERE id=?", (uid,)).fetchone()
+    if not u or not check_password_hash(u["pw_hash"], d.get("password", "")):
+        # 400, not 401 — a wrong password here must not trigger the session-expiry path
+        return jsonify(error="Incorrect password — account was not deleted."), 400
+    with db() as c:
+        for t in ("tokens", "transactions", "alerts", "reports",
+                  "recipients", "otps", "resets"):
+            c.execute(f"DELETE FROM {t} WHERE user_id=?", (uid,))
+        # scrub the deleted account's identity from other users' ledgers too
+        c.execute("""UPDATE transactions SET name='Deleted account', upi_id='deleted@upi'
+                     WHERE upi_id=? AND direction='credit'""", (u["upi_id"],))
+        c.execute("DELETE FROM users WHERE id=?", (uid,))
+    return jsonify(ok=True, message="Account and all associated data permanently deleted.")
+
+@app.post("/api/account/real-upi")
+@auth
+def set_real_upi():
+    v = (request.get_json(force=True).get("real_upi") or "").strip().lower()
+    if v and not re.fullmatch(r"[a-z0-9._\-]{2,}@[a-z]{2,}", v):
+        return jsonify(error="Enter a valid UPI ID (e.g. name@okaxis)."), 400
+    with db() as c:
+        c.execute("UPDATE users SET real_upi=? WHERE id=?", (v or None, request.user_id))
+    return jsonify(ok=True, real_upi=v,
+                   message=("Real UPI ID saved — friends can now send you real money."
+                            if v else "Real UPI ID removed."))
+
 @app.post("/api/logout")
 @auth
 def logout():
@@ -355,18 +486,36 @@ def dashboard():
         txns = c.execute("""SELECT * FROM transactions WHERE user_id=?
                             ORDER BY created_at DESC LIMIT 60""", (uid,)).fetchall()
         stats = c.execute("""
-            SELECT COUNT(*) total, COALESCE(SUM(amount),0) vol,
+            SELECT COUNT(*) total,
+                   COALESCE(SUM(CASE WHEN direction='debit' THEN amount ELSE 0 END),0) vol,
+                   COALESCE(SUM(CASE WHEN direction='credit' THEN amount ELSE 0 END),0) received,
                    SUM(CASE WHEN risk>=70 THEN 1 ELSE 0 END) high,
                    SUM(CASE WHEN risk>=35 AND risk<70 THEN 1 ELSE 0 END) med,
                    SUM(CASE WHEN status='Completed' THEN 1 ELSE 0 END) completed
                    FROM transactions WHERE user_id=?""", (uid,)).fetchone()
         al = c.execute("SELECT COUNT(*) n FROM alerts WHERE user_id=?", (uid,)).fetchone()["n"]
         bal = c.execute("SELECT balance FROM users WHERE id=?", (uid,)).fetchone()["balance"]
+        me = c.execute("""SELECT name, upi_id, email, phone, real_upi
+                           FROM users WHERE id=?""", (uid,)).fetchone()
     return jsonify(stats={"total": stats["total"], "volume": round(stats["vol"], 2),
+                          "received": round(stats["received"], 2),
                           "high": stats["high"], "medium": stats["med"],
                           "completed": stats["completed"], "alerts": al,
                           "balance": round(bal, 2)},
+                   profile={"name": me["name"], "upi_id": me["upi_id"],
+                            "email": me["email"], "phone": me["phone"],
+                            "real_upi": me["real_upi"]},
                    transactions=[dict(t) for t in txns])
+
+@app.get("/api/directory")
+@auth
+def directory():
+    """Registered PhishGuard accounts — demo peer-to-peer transfer targets."""
+    with db() as c:
+        rows = c.execute("""SELECT name, upi_id, real_upi FROM users
+                            WHERE id<>? AND upi_id IS NOT NULL
+                            ORDER BY id DESC LIMIT 12""", (request.user_id,)).fetchall()
+    return jsonify(users=[dict(r) for r in rows])
 
 # ---------------- QR decode (server-side OpenCV fallback) ----------------
 @app.post("/api/decode")
@@ -412,6 +561,23 @@ def analyze():
     return jsonify(res)
 
 # ---------------- pay ----------------
+def credit_receiver(sender_id, sender_upi, sender_name, upi, amt, note):
+    """Mirror an outgoing payment into a registered recipient's account (P2P demo ledger)."""
+    with db() as c:
+        recv = c.execute("SELECT id FROM users WHERE upi_id=? AND id<>?",
+                         (upi, sender_id)).fetchone()
+        if not recv:
+            return None
+        c.execute("UPDATE users SET balance=balance+? WHERE id=?", (amt, recv["id"]))
+        c.execute("""INSERT INTO transactions
+            (user_id,upi_id,name,amount,note,risk,level,status,reasons,direction,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (recv["id"], sender_upi, sender_name, amt, note or "Payment",
+             0, "Low", "Completed", json.dumps([]), "credit", datetime.utcnow().isoformat()))
+    push_alert(recv["id"], "Low", f"₹{amt:,.0f} received",
+               f"{sender_name} ({sender_upi}) sent you ₹{amt:,.0f}.")
+    return recv["id"]
+
 @app.post("/api/pay")
 @auth
 def pay():
@@ -421,6 +587,13 @@ def pay():
     amt = float(d.get("amount") or 0)
     if not upi or "@" not in upi or amt <= 0:
         return jsonify(error="Enter a valid UPI ID and amount."), 400
+    with db() as c:
+        me = c.execute("SELECT name, upi_id, balance FROM users WHERE id=?", (uid,)).fetchone()
+    if me and upi.lower() == (me["upi_id"] or "").lower():
+        return jsonify(error="That's your own PhishGuard handle — pick another account."), 400
+    if me and float(me["balance"] or 0) < amt:
+        # reject before risk analysis / OTP issuance, not after
+        return jsonify(error="Insufficient balance."), 400
     res = analyze_payload(uid, {"type": "pay", "value": upi, "amount": amt})
     with db() as c:
         rec = c.execute("SELECT name, verified FROM recipients WHERE upi_id=? AND user_id=?",
@@ -438,6 +611,9 @@ def pay():
             if bal < amt:
                 return jsonify(error="Insufficient balance."), 400
             c.execute("UPDATE users SET balance=balance-? WHERE id=?", (amt, uid))
+        recv_id = credit_receiver(uid, me["upi_id"], me["name"], upi, amt, d.get("note", ""))
+        if recv_id:
+            res["credited"] = True
         push_alert(uid, "Low", f"Payment of ₹{amt:,.0f} completed",
                    f"Paid to {upi} ({name}).")
     elif status == "verify":
@@ -453,13 +629,11 @@ def pay():
 
     with db() as c:
         c.execute("""INSERT INTO transactions
-            (user_id,upi_id,name,amount,note,risk,level,status,reasons,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                  (uid, upi, name, amt, d.get("note", "Payment"), res["risk"],
-                   res["level"],
-                   {"success": "Completed", "verify": "Pending",
-                    "blocked": "Blocked"}[status],
-                   json.dumps(res["reasons"]), datetime.utcnow().isoformat()))
+            (user_id,upi_id,name,amount,note,risk,level,status,reasons,direction,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                  (uid, upi, name, amt, d.get("note", "Payment"), res["risk"], res["level"],
+                   {"success": "Completed", "verify": "Pending", "blocked": "Blocked"}[status],
+                   json.dumps(res["reasons"]), "debit", datetime.utcnow().isoformat()))
     return jsonify(pay_ref=pay_ref,
                    recipient={"upi": upi, "name": name}, amount=amt,
                    status=status, **res)
@@ -477,18 +651,115 @@ def pay_confirm():
             return jsonify(error="Incorrect code."), 400
         if datetime.fromisoformat(o["expires_at"]) < datetime.utcnow():
             return jsonify(error="Code expired — start the payment again."), 400
+        # settle the pending payment exactly once — amount comes from the DB, not the client
+        pending = c.execute("""SELECT * FROM transactions
+                               WHERE user_id=? AND upi_id=? AND status='Pending'
+                               ORDER BY id DESC""",
+                            (request.user_id, d.get("upi_id", ""))).fetchone()
+        if not pending:
+            return jsonify(error="No pending payment to confirm."), 400
+        amt = float(pending["amount"])
+        bal = c.execute("SELECT balance FROM users WHERE id=?",
+                        (request.user_id,)).fetchone()["balance"]
+        if bal < amt:
+            return jsonify(error="Insufficient balance."), 400
+        me = c.execute("SELECT name, upi_id FROM users WHERE id=?",
+                       (request.user_id,)).fetchone()
         c.execute("UPDATE otps SET used=1 WHERE id=?", (o["id"],))
-        # complete the pending txn exactly once, and deduct exactly once
-        cur = c.execute("""UPDATE transactions SET status='Completed'
-                           WHERE user_id=? AND upi_id=? AND status='Pending'""",
-                        (request.user_id, d.get("upi_id", "")))
-        if cur.rowcount:
-            amt = float(d.get("amount") or 0)
-            c.execute("""UPDATE users SET balance=balance-?
-                         WHERE id=? AND balance>=?""", (amt, request.user_id, amt))
+        c.execute("UPDATE transactions SET status='Completed' WHERE id=?", (pending["id"],))
+        c.execute("UPDATE users SET balance=balance-? WHERE id=?", (amt, request.user_id))
+    # registered recipients are credited here too (verified/OTP path)
+    credit_receiver(request.user_id, me["upi_id"], me["name"],
+                    pending["upi_id"], amt, pending["note"])
     push_alert(request.user_id, "Low", "Payment authorized after verification",
                f"Payment {d.get('pay_ref')} completed after extra confirmation.")
-    return jsonify(ok=True, status="success")
+    return jsonify(ok=True, status="success", amount=amt)
+
+# ---------------- real-money UPI (deep link + UTR confirmation) ----------------
+def upi_deep_link(vpa, name, amt, note):
+    """Standard NPCI UPI intent — opens the payer's UPI app with everything pre-filled."""
+    return (f"upi://pay?pa={quote(vpa)}&pn={quote((name or vpa)[:50])}"
+            f"&am={amt:.2f}&cu=INR&tn={quote((note or 'PhishGuard payment')[:50])}")
+
+@app.post("/api/pay/real")
+@auth
+def pay_real():
+    """Stage a real-money UPI payment: risk-check, then hand a deep link to the payer's UPI app."""
+    d = request.get_json(force=True)
+    uid = request.user_id
+    upi = d.get("upi_id", "").strip()
+    amt = float(d.get("amount") or 0)
+    if not upi or "@" not in upi or amt <= 0:
+        return jsonify(error="Enter a valid UPI ID and amount."), 400
+    with db() as c:
+        me = c.execute("SELECT name, upi_id, balance FROM users WHERE id=?", (uid,)).fetchone()
+        recv = c.execute("SELECT name, real_upi FROM users WHERE upi_id=?", (upi,)).fetchone()
+    if upi.lower() == (me["upi_id"] or "").lower():
+        return jsonify(error="That's your own PhishGuard handle — pick another account."), 400
+    if float(me["balance"] or 0) < amt:
+        return jsonify(error="Insufficient balance for this transfer."), 400
+    if recv:
+        # registered peer: money must go to the real VPA they linked in Settings
+        if not recv["real_upi"]:
+            return jsonify(error=f"{recv['name'] or upi} has not linked a real UPI ID yet — "
+                                 "ask them to add it in Settings, or use a demo transfer."), 400
+        target = recv["real_upi"]
+    else:
+        target = upi   # external payee: the typed handle is the VPA
+    name = d.get("name") or (recv["name"] if recv else upi.split("@")[0].title())
+    res = analyze_payload(uid, {"type": "pay", "value": upi, "amount": amt})
+    if res["level"] == "High":
+        with db() as c:
+            c.execute("""INSERT INTO transactions
+                (user_id,upi_id,name,amount,note,risk,level,status,reasons,direction,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                      (uid, upi, name, amt, d.get("note", "UPI payment"),
+                       res["risk"], res["level"], "Blocked", json.dumps(res["reasons"]),
+                       "debit", datetime.utcnow().isoformat()))
+        push_alert(uid, "High", "Real-money payment blocked",
+                   f"₹{amt:,.0f} to {upi} flagged as high risk — transfer not staged.")
+        return jsonify(status="blocked", **res)
+    pay_ref = "PG" + "".join(random.choices(string.digits, k=10))
+    with db() as c:
+        c.execute("""INSERT INTO transactions
+            (user_id,upi_id,name,amount,note,risk,level,status,reasons,direction,pay_ref,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (uid, upi, name, amt, d.get("note", "UPI payment"),
+                   res["risk"], res["level"], "Pending", json.dumps(res["reasons"]),
+                   "debit", pay_ref, datetime.utcnow().isoformat()))
+    return jsonify(pay_ref=pay_ref, status="pending", target=target,
+                   upi_link=upi_deep_link(target, name, amt, d.get("note", "")), **res)
+
+@app.post("/api/pay/real/confirm")
+@auth
+def pay_real_confirm():
+    """Settle a staged real-money payment once the payer supplies the UTR from their UPI app."""
+    d = request.get_json(force=True)
+    utr = d.get("utr", "").strip()
+    if not re.fullmatch(r"\d{12}", utr):
+        return jsonify(error="Enter the 12-digit UTR (transaction reference) shown in your UPI app."), 400
+    uid = request.user_id
+    with db() as c:
+        if c.execute("SELECT 1 FROM transactions WHERE utr=?", (utr,)).fetchone():
+            return jsonify(error="That UTR was already used — each transfer settles once."), 400
+        pending = c.execute("""SELECT * FROM transactions
+                               WHERE user_id=? AND pay_ref=? AND status='Pending'""",
+                            (uid, d.get("pay_ref"))).fetchone()
+        if not pending:
+            return jsonify(error="No pending real-money payment found."), 400
+        amt = float(pending["amount"])
+        me = c.execute("SELECT name, upi_id, balance FROM users WHERE id=?",
+                       (uid,)).fetchone()
+        if float(me["balance"] or 0) < amt:
+            return jsonify(error="Insufficient balance."), 400
+        c.execute("UPDATE transactions SET status='Completed', utr=? WHERE id=?",
+                  (utr, pending["id"]))
+        c.execute("UPDATE users SET balance=balance-? WHERE id=?", (amt, uid))
+    # registered recipients get the mirrored credit in their ledger
+    credit_receiver(uid, me["upi_id"], me["name"], pending["upi_id"], amt, pending["note"])
+    push_alert(uid, "Low", f"Real-money transfer of ₹{amt:,.0f} confirmed",
+               f"Settled to {pending['upi_id']} · UTR {utr}.")
+    return jsonify(ok=True, status="success", amount=amt, upi=pending["upi_id"])
 
 # ---------------- alerts ----------------
 @app.get("/api/alerts")
